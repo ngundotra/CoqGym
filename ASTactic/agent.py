@@ -224,6 +224,7 @@ class Agent:
         tactics = self.model.beam_search(env, local_context, goal)
         stack = [[tac_template % tac.to_tokens() for tac in tactics[::-1]]]
         script = []
+        # pdb.set_trace()
 
         # depth-first search starting from the trace
         while stack != [[]]:

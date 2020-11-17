@@ -5,7 +5,7 @@ from glob import glob
 import argparse
 import json
 import os
-import sys
+import sys, os
 sys.setrecursionlimit(100000)
 sys.path.append(os.path.normpath(os.path.dirname(os.path.realpath(__file__))))
 sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), '../')))
@@ -24,6 +24,8 @@ if __name__ == '__main__':
     parser.add_argument('--datapath', type=str, default='../data')
     parser.add_argument('--projs_split', type=str, default='../projs_split.json')
     parser.add_argument('--split', choices=['train', 'valid', 'test'], type=str, default='test')
+    parser.add_argument('--gpu', type=int)
+    parser.add_argument('--folder', type=str)
     parser.add_argument('--file', type=str)
     parser.add_argument('--proof', type=str)
     parser.add_argument('--filter', type=str)
@@ -48,6 +50,9 @@ if __name__ == '__main__':
     opts.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if opts.device.type == 'cpu':
         log('using CPU', 'WARNING')
+    if opts.gpu:
+        print("Setting GPU to device {}".format(opts.gpu))
+        torch.cuda.set_device(opts.gpu)
 
     torch.manual_seed(opts.seed)
     torch.backends.cudnn.deterministic = True
@@ -69,8 +74,13 @@ if __name__ == '__main__':
 
     agent = Agent(model, None, None, opts)
 
+    print(opts.file, opts.folder)
     if opts.file:
         files = [opts.file]
+    elif opts.folder:
+        print("Folder!")
+        files = glob(os.path.join(opts.datapath, "{}/*json".format(opts.folder)), recursive=True)
+        print(files)
     else:
         files = []
         projs = json.load(open(opts.projs_split))['projs_' + opts.split]
@@ -92,7 +102,9 @@ if __name__ == '__main__':
     oup_dir = os.path.join(opts.output_dir, opts.eval_id)
     if not os.path.exists(oup_dir):
          os.makedirs(oup_dir)
-    if opts.filter is None and opts.file is None:
+    if opts.folder:
+        oup_file = os.path.join(oup_dir, '{}-results.json'.format(opts.folder))
+    elif opts.filter is None and opts.file is None:
         oup_file = os.path.join(oup_dir, 'results.json')
     elif opts.file is None:
         oup_file = os.path.join(oup_dir, '%s.json' % opts.filter)
@@ -102,5 +114,6 @@ if __name__ == '__main__':
         oup_file = os.path.join(oup_dir, '%s-%s.json' % (os.path.sep.join(opts.file.split(os.path.sep)[2:]).replace(os.path.sep, '-'), opts.proof))
     opts = vars(opts)
     del opts['device']
+    os.makedirs(os.path.dirname(oup_file), exist_ok=True)
     json.dump({'options': opts, 'results': results}, open(oup_file, 'wt'))
     log('results saved to ' + oup_file)

@@ -32,10 +32,8 @@ term_parser = GallinaTermParser(caching=True)
 sexp_cache = SexpCache('../sexp_cache', readonly=True)
 
 def filter_env(env):
-    "Get the last 10 toplevel constants"
     filtered_env = []
-    toplevel_consts = [const for const in env['constants'] if const['qualid'].startswith('SerTop')]
-    for const in toplevel_consts[-10:]:
+    for const in [const for const in env['constants'] if const['qualid'].startswith('SerTop')][-10:]:
         ast = sexp_cache[const['sexp']]
         filtered_env.append({'qualid': const['qualid'], 'ast': term_parser.parse(ast)})
     return filtered_env
@@ -113,6 +111,52 @@ class Agent:
         log('\ntraining losses: %f' % loss)
 
 
+    def train_DFS(self, n_epoch, filename, proof_name=None):
+        self.model.train()
+        log('training with DFS')
+
+        if 'hammer' in self.opts.method:
+            for atp in ['Vampire', 'Z3', 'CVC4', 'Eprover']:
+                if ('hammer_' + atp) in self.opts.method:
+                    with_hammer = atp
+                    self.opts.method = self.opts.method.replace('hammer_' + atp, 'hammer')
+                    break
+            else:
+                with_hammer = 'All'
+        else:
+            with_hammer = None
+        assert 'hammer_' not in self.opts.method
+        hammer_timeout = self.opts.hammer_timeout if 'ours' in self.opts.method else self.opts.timeout
+
+        # TODO: train with training `data_batch` instead. Create `proof_env` for each data.
+        with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer,
+                     hammer_timeout=hammer_timeout) as file_env:
+            results = []
+            for proof_env in file_env:  # start a proof
+                if proof_name is not None and proof_env.proof['name'] != proof_name:
+                    continue
+                print('proof: ', proof_env.proof['name'])
+                # print('cuda memory allocated before proof: ', torch.cuda.memory_allocated(self.opts.device), file=sys.stderr)
+                success, proof_pred, time, num_tactics, loss = self.prove(proof_env)
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+
+                results.append({
+                    'filename': filename, 'proof_name': proof_env.proof['name'], 'success': success,
+                    'proof_gt': [step['command'][0] for step in proof_env.proof['steps'] if
+                                 step['command'][1] != 'VernacEndProof'],
+                    'proof_pred': proof_pred,
+                    'time': time,
+                    'num_tactics': num_tactics, })
+                if proof_name is not None:
+                    break
+
+        #log('\ntraining losses: %f' % loss.item())
+        return results
+
+
     def valid(self, n_epoch):
         self.model.eval()
         log('validating..')
@@ -175,7 +219,7 @@ class Agent:
                     continue
                 print('proof: ', proof_env.proof['name'])
                 #print('cuda memory allocated before proof: ', torch.cuda.memory_allocated(self.opts.device), file=sys.stderr)
-                success, proof_pred, time, num_tactics = self.prove(proof_env)
+                success, proof_pred, time, num_tactics, _ = self.prove(proof_env)
                 results.append({
                     'filename': filename, 'proof_name': proof_env.proof['name'], 'success': success,
                     'proof_gt': [step['command'][0] for step in proof_env.proof['steps'] if step['command'][1] != 'VernacEndProof'],
@@ -222,9 +266,11 @@ class Agent:
         # initialize the stack
         local_context, goal = parse_goal(obs['fg_goals'][0])
         tactics = self.model.beam_search(env, local_context, goal)
-        stack = [[tac_template % tac.to_tokens() for tac in tactics[::-1]]]
+        stack = [[(tac_template % tac.to_tokens(), torch.log(prob)) for tac, prob in tactics[::-1]]]
         script = []
-        # pdb.set_trace()
+
+        # store logprobs to be rewarded
+        update_list = []
 
         # depth-first search starting from the trace
         while stack != [[]]:
@@ -236,7 +282,7 @@ class Agent:
                 proof_env.step('Undo.')
                 continue
             else:
-                tac = stack[-1].pop()
+                tac, logprob = stack[-1].pop()
 
             obs = proof_env.step(tac)
             print(obs['result'])
@@ -244,6 +290,7 @@ class Agent:
 
             if obs['result'] == 'SUCCESS':
                 script.append(tac)
+                update_list.append(logprob)
                 time = self.opts.timeout - obs['time_left']
                 num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
                 return True, script, time, num_tactics
@@ -264,13 +311,15 @@ class Agent:
                 first_goal_signatures.add(sig)
                 local_context, goal = parse_goal(obs['fg_goals'][0])
                 tactics = self.model.beam_search(env, local_context, goal)
-                stack.append([tac_template % tac.to_tokens() for tac in tactics[::-1]])
+                stack.append([(tac_template % tac.to_tokens(), logprob+torch.log(prob)) for tac, prob in tactics[::-1]])
 
         obs = proof_env.step('Admitted.')
         print(obs['result'])
         time = self.opts.timeout - obs['time_left']
         num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-        return False, script, time, num_tactics
+
+        loss = -torch.mean(torch.stack(update_list))
+        return False, script, time, num_tactics, loss
 
 
     def prove_IDDFS(self, proof_env, tac_template):
@@ -298,7 +347,7 @@ class Agent:
                 # initialize the stack
                 local_context, goal = parse_goal(obs['fg_goals'][0])
                 tactics = self.model.beam_search(env, local_context, goal)
-                stack = [[tac_template % tac.to_tokens() for tac in tactics[::-1]]]
+                stack = [[tac_template % tac.to_tokens() for tac, _ in tactics[::-1]]]
 
                 # depth-first search starting from the trace
                 while stack != [[]]:
@@ -340,7 +389,7 @@ class Agent:
                         first_goal_signatures.add(sig)
                         local_context, goal = parse_goal(obs['fg_goals'][0])
                         tactics = self.model.beam_search(env, local_context, goal)
-                        stack.append([tac_template % tac.to_tokens() for tac in tactics[::-1]])
+                        stack.append([tac_template % tac.to_tokens() for tac, _ in tactics[::-1]])
 
                 proof_env.step('Restart.')
                 gc.collect()

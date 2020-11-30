@@ -154,8 +154,14 @@ class Agent:
                     probs = torch.cat([p.unsqueeze(0) for p in probs]) 
                     probs = probs / torch.exp(probs)
                     wins = torch.Tensor([t[0] for t in trajectories]).to(probs.device)
+                    # If we have all failures, use backup signal
+                    alpha_backup = 0.05
+                    expanded = torch.Tensor([t[-2] for t in trajectories]).to(probs.device)
+                    signal = alpha_backup*(expanded - expanded.mean()) / (1e-8 + expanded.std())
+                    signal += 2*(wins-0.5)
+                    print(expanded)
                     # pdb.set_trace()
-                    loss = -torch.multiply(probs, wins).mean()
+                    loss = -torch.multiply(probs, signal).mean()
 
                     self.optimizer.zero_grad()
                     loss.backward()
@@ -346,7 +352,7 @@ class Agent:
         # initialize the stack
         local_context, goal = parse_goal(obs['fg_goals'][0])
         tactics = self.model.beam_search(env, local_context, goal, train)
-        stack = [[(tac_template % tac.to_tokens(), prob) for tac, prob in tactics[::-1]]]
+        stack = [[(tac_template % tac.to_tokens(), prob, 1) for tac, prob in tactics[::-1]]]
         script = []
 
         # store logprobs to be rewarded later
@@ -362,9 +368,11 @@ class Agent:
                 proof_env.step('Undo.')
                 continue
             else:
-                tac, logprob = stack[-1].pop()
+                tac, logprob, max_goal = stack[-1].pop()
 
             obs = proof_env.step(tac)
+            fg_goals, bg_goals, shelved_goals, _ = proof_env.serapi.query_goals()
+            max_goal = max(len(fg_goals)+len(bg_goals)+len(shelved_goals), max_goal)
             # print(obs['result'])
             # print_goals(obs)
 
@@ -372,17 +380,17 @@ class Agent:
                 script.append(tac)
                 time = self.opts.timeout - obs['time_left']
                 num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-                prob_list.append((True, script, time, num_tactics, logprob))
+                prob_list.append((True, script, time, num_tactics, max_goal, logprob))
                 continue
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
                 time = self.opts.timeout - obs['time_left']
                 num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-                prob_list.append((False, script, time, num_tactics, logprob))
+                prob_list.append((False, script, time, num_tactics, max_goal, logprob))
                 return prob_list
             elif obs['result'] in ['ERROR']: # Tactic is misapplied, nothing happened
                 time = self.opts.timeout - obs['time_left']
                 num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-                prob_list.append((False, script, time, num_tactics, logprob))
+                prob_list.append((False, script, time, num_tactics, max_goal, logprob))
                 continue
             else:
                 script.append(tac)
@@ -394,13 +402,13 @@ class Agent:
                 first_goal_signatures.add(sig)
                 local_context, goal = parse_goal(obs['fg_goals'][0])
                 tactics = self.model.beam_search(env, local_context, goal, train)
-                stack.append([(tac_template % tac.to_tokens(), logprob + prob) for tac, prob in tactics[::-1]])
+                stack.append([(tac_template % tac.to_tokens(), logprob + prob, max_goal) for tac, prob in tactics[::-1]])
 
         obs = proof_env.step('Admitted.')
         # print(obs['result'])
         time = self.opts.timeout - obs['time_left']
         num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-        prob_list.append((False, script, time, num_tactics, logprob))
+        prob_list.append((False, script, time, num_tactics, max_goal, logprob))
         return prob_list
 
     def prove_DFS(self, proof_env, tac_template):

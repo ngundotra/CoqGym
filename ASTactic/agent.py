@@ -112,6 +112,13 @@ class Agent:
 
 
     def train_DFS(self, n_epoch, filename, proof_name=None):
+        """
+        TODO:
+            - reset the env
+            - perform batched update at the end of an epoch (?)
+            - 150 trajectories per update (?)
+            - produce residual reward by # of open & closed goals from each environment (?)
+        """
         self.model.train()
         log('training with DFS')
 
@@ -129,32 +136,41 @@ class Agent:
         hammer_timeout = self.opts.hammer_timeout if 'ours' in self.opts.method else self.opts.timeout
 
         # TODO: train with training `data_batch` instead. Create `proof_env` for each data.
-        with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer,
-                     hammer_timeout=hammer_timeout) as file_env:
-            results = []
-            for proof_env in file_env:  # start a proof
-                if proof_name is not None and proof_env.proof['name'] != proof_name:
-                    continue
-                print('proof: ', proof_env.proof['name'])
-                # print('cuda memory allocated before proof: ', torch.cuda.memory_allocated(self.opts.device), file=sys.stderr)
-                success, proof_pred, time, num_tactics, logprob = self.prove(proof_env, train=True)
+        # {proof_name: [lowest loss, success]}
+        leaderboard = {}
+        for _ in range(n_epoch):
+            with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer,
+                        hammer_timeout=hammer_timeout) as file_env:
+                results = []
+                for proof_env in file_env:  # start a proof
+                    curr_name = proof_env.proof['name']
+                    if proof_name is not None and curr_name != proof_name:
+                        continue
+                    print('proof: ', proof_env.proof['name'])
+                    # success, proof_pred, time, num_tactics, trajectory = self.prove(proof_env, train=True)
+                    trajectories = self.prove(proof_env, train=True)
 
-                loss = -logprob / num_tactics
-                if not success:
-                    loss *= -1
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+                    probs = [t[-1] for t in trajectories]
+                    probs = torch.cat([p.unsqueeze(0) for p in probs]) 
+                    probs = probs / torch.exp(probs)
+                    wins = torch.Tensor([t[0] for t in trajectories]).to(probs.device)
+                    # pdb.set_trace()
+                    loss = -torch.multiply(probs, wins).mean()
 
-                results.append({
-                    'filename': filename, 'proof_name': proof_env.proof['name'], 'success': success,
-                    'proof_gt': [step['command'][0] for step in proof_env.proof['steps'] if
-                                 step['command'][1] != 'VernacEndProof'],
-                    'proof_pred': proof_pred,
-                    'time': time,
-                    'num_tactics': num_tactics, })
-                if proof_name is not None:
-                    break
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    self.optimizer.step()
+
+                    if curr_name not in leaderboard:
+                        leaderboard[curr_name] = [loss.item(), torch.mean(wins)]
+                    elif loss < leaderboard[curr_name][0]:
+                        leaderboard[curr_name] = [loss.item(), torch.mean(wins)]
+
+                    if proof_name is not None:
+                        break
+                    
+                    # proof_env.serapi = proof_env.initialize_serapi()
+            print(leaderboard)
 
         #log('\ntraining losses: %f' % loss.item())
         return results
@@ -298,16 +314,28 @@ class Agent:
         else:
             tac_template = '%s.'
 
-        return self.prove_DFS(proof_env, tac_template, train)
+        if not train:
+            return self.prove_DFS(proof_env, tac_template)
+        return self.train_prove(proof_env, tac_template, train=True)
 
 
-    def prove_DFS(self, proof_env, tac_template, train=False):
+    def train_prove(self, proof_env, tac_template, train=False):
         """
         Single attempt to prove something
         ENDS
             - when error happens
             - when success is reached
             - when timelimit hit
+
+
+        TODO:
+            - collect a SINGLE trajectory
+            - on ERROR: just add sample
+            - on TIMEOUT: return samples
+            - on SUCCESS: return samples
+            - replace beam search with sampling
+
+        sample = logprob of action taken (?)
         """
         obs = proof_env.init()
         env = filter_env(obs['env'])
@@ -322,7 +350,7 @@ class Agent:
         script = []
 
         # store logprobs to be rewarded later
-        logprob_list = []
+        prob_list = []
 
         # depth-first search starting from the trace
         while stack != [[]]:
@@ -344,11 +372,73 @@ class Agent:
                 script.append(tac)
                 time = self.opts.timeout - obs['time_left']
                 num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-                return True, script, time, num_tactics, logprob 
+                prob_list.append((True, script, time, num_tactics, logprob))
+                continue
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
                 time = self.opts.timeout - obs['time_left']
                 num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-                return False, script, time, num_tactics, logprob 
+                prob_list.append((False, script, time, num_tactics, logprob))
+                return prob_list
+            elif obs['result'] in ['ERROR']: # Tactic is misapplied, nothing happened
+                time = self.opts.timeout - obs['time_left']
+                num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
+                prob_list.append((False, script, time, num_tactics, logprob))
+                continue
+            else:
+                script.append(tac)
+                sig = get_goal_signature(obs['fg_goals'][0])
+                if sig in first_goal_signatures or len(script) >= self.opts.depth_limit:
+                    proof_env.step('Undo.')
+                    script.pop()
+                    continue
+                first_goal_signatures.add(sig)
+                local_context, goal = parse_goal(obs['fg_goals'][0])
+                tactics = self.model.beam_search(env, local_context, goal, train)
+                stack.append([(tac_template % tac.to_tokens(), logprob + prob) for tac, prob in tactics[::-1]])
+
+        obs = proof_env.step('Admitted.')
+        # print(obs['result'])
+        time = self.opts.timeout - obs['time_left']
+        num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
+        prob_list.append((False, script, time, num_tactics, logprob))
+        return prob_list
+
+    def prove_DFS(self, proof_env, tac_template):
+        obs = proof_env.init()
+        env = filter_env(obs['env'])
+        first_goal_signatures = {get_goal_signature(obs['fg_goals'][0])}
+
+        # initialize the stack
+        local_context, goal = parse_goal(obs['fg_goals'][0])
+        tactics = self.model.beam_search(env, local_context, goal)
+        stack = [[tac_template % tac.to_tokens() for tac in tactics[::-1]]]
+        script = []
+
+        # depth-first search starting from the trace
+        while stack != [[]]:
+            #print('stack: ', stack)
+            # pick a tactic
+            if stack[-1] == []:  # all candidate have been tried, backtrack
+                stack.pop()
+                script.pop()
+                proof_env.step('Undo.')
+                continue
+            else:
+                tac = stack[-1].pop()
+
+            obs = proof_env.step(tac)
+            print(obs['result'])
+            print_goals(obs)
+
+            if obs['result'] == 'SUCCESS':
+                script.append(tac)
+                time = self.opts.timeout - obs['time_left']
+                num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
+                return True, script, time, num_tactics
+            elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
+                time = self.opts.timeout - obs['time_left']
+                num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
+                return False, script, time, num_tactics
             elif obs['result'] in ['ERROR']:
                 continue
             else:
@@ -361,16 +451,14 @@ class Agent:
                     continue
                 first_goal_signatures.add(sig)
                 local_context, goal = parse_goal(obs['fg_goals'][0])
-                tactics = self.model.beam_search(env, local_context, goal, train)
-                stack.append([(tac_template % tac.to_tokens(), logprob+prob) for tac, prob in tactics[::-1]])
+                tactics = self.model.beam_search(env, local_context, goal)
+                stack.append([tac_template % tac.to_tokens() for tac in tactics[::-1]])
 
         obs = proof_env.step('Admitted.')
-        # print(obs['result'])
+        print(obs['result'])
         time = self.opts.timeout - obs['time_left']
         num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-
-        return False, script, time, num_tactics, logprob 
-
+        return False, script, time, num_tactics
 
     def prove_IDDFS(self, proof_env, tac_template):
         obs = proof_env.init()

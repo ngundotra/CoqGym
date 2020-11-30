@@ -137,8 +137,11 @@ class Agent:
                     continue
                 print('proof: ', proof_env.proof['name'])
                 # print('cuda memory allocated before proof: ', torch.cuda.memory_allocated(self.opts.device), file=sys.stderr)
-                success, proof_pred, time, num_tactics, loss = self.prove(proof_env)
+                success, proof_pred, time, num_tactics, logprob = self.prove(proof_env, train=True)
 
+                loss = -logprob / num_tactics
+                if not success:
+                    loss *= -1
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
@@ -284,7 +287,7 @@ class Agent:
             return False, [tac], time, 1
 
 
-    def prove(self, proof_env):
+    def prove(self, proof_env, train=False):
         'prove a theorem interactively'
         if 'ours' not in self.opts.method:  # auto, hammer, etc.
             return self.prove_one_tactic(proof_env, self.opts.method)
@@ -295,10 +298,17 @@ class Agent:
         else:
             tac_template = '%s.'
 
-        return self.prove_DFS(proof_env, tac_template)
+        return self.prove_DFS(proof_env, tac_template, train)
 
 
-    def prove_DFS(self, proof_env, tac_template):
+    def prove_DFS(self, proof_env, tac_template, train=False):
+        """
+        Single attempt to prove something
+        ENDS
+            - when error happens
+            - when success is reached
+            - when timelimit hit
+        """
         obs = proof_env.init()
         env = filter_env(obs['env'])
         first_goal_signatures = {get_goal_signature(obs['fg_goals'][0])}
@@ -307,12 +317,12 @@ class Agent:
 
         # initialize the stack
         local_context, goal = parse_goal(obs['fg_goals'][0])
-        tactics = self.model.beam_search(env, local_context, goal)
-        stack = [[(tac_template % tac.to_tokens(), torch.log(prob)) for tac, prob in tactics[::-1]]]
+        tactics = self.model.beam_search(env, local_context, goal, train)
+        stack = [[(tac_template % tac.to_tokens(), prob) for tac, prob in tactics[::-1]]]
         script = []
 
-        # store logprobs to be rewarded
-        update_list = []
+        # store logprobs to be rewarded later
+        logprob_list = []
 
         # depth-first search starting from the trace
         while stack != [[]]:
@@ -332,14 +342,13 @@ class Agent:
 
             if obs['result'] == 'SUCCESS':
                 script.append(tac)
-                update_list.append(logprob)
                 time = self.opts.timeout - obs['time_left']
                 num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-                return True, script, time, num_tactics
+                return True, script, time, num_tactics, logprob 
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
                 time = self.opts.timeout - obs['time_left']
                 num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-                return False, script, time, num_tactics
+                return False, script, time, num_tactics, logprob 
             elif obs['result'] in ['ERROR']:
                 continue
             else:
@@ -352,16 +361,15 @@ class Agent:
                     continue
                 first_goal_signatures.add(sig)
                 local_context, goal = parse_goal(obs['fg_goals'][0])
-                tactics = self.model.beam_search(env, local_context, goal)
-                stack.append([(tac_template % tac.to_tokens(), logprob+torch.log(prob)) for tac, prob in tactics[::-1]])
+                tactics = self.model.beam_search(env, local_context, goal, train)
+                stack.append([(tac_template % tac.to_tokens(), logprob+prob) for tac, prob in tactics[::-1]])
 
         obs = proof_env.step('Admitted.')
         # print(obs['result'])
         time = self.opts.timeout - obs['time_left']
         num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
 
-        loss = -torch.mean(torch.stack(update_list))
-        return False, script, time, num_tactics, loss
+        return False, script, time, num_tactics, logprob 
 
 
     def prove_IDDFS(self, proof_env, tac_template):

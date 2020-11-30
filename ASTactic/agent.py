@@ -195,6 +195,46 @@ class Agent:
         return loss_avg
 
 
+    def gloop_evaluate(self, filename, proof_name=None):
+        if self.model is not None:
+            self.model.eval()
+
+        if 'hammer' in self.opts.method:
+            for atp in ['Vampire', 'Z3', 'CVC4', 'Eprover']:
+                if ('hammer_' + atp) in self.opts.method:
+                    with_hammer = atp
+                    self.opts.method = self.opts.method.replace('hammer_' + atp, 'hammer')
+                    break
+            else:
+                with_hammer = 'All'
+        else:
+            with_hammer = None
+        assert 'hammer_' not in self.opts.method
+        hammer_timeout = self.opts.hammer_timeout if 'ours' in self.opts.method else self.opts.timeout
+
+        with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer, hammer_timeout=hammer_timeout) as file_env:
+            results = []
+            # Combine constants, inductives, and foreground goals
+            proof_env = file_env.coagulated_env()
+
+            if proof_name is not None and proof_env.proof['name'] != proof_name:
+                return results
+            print('proof: ', proof_env.proof['name'])
+            #print('cuda memory allocated before proof: ', torch.cuda.memory_allocated(self.opts.device), file=sys.stderr)
+            success, proof_pred, time, num_tactics = self.prove(proof_env)
+
+            # Append separate proof per goal n coagulated environment
+            results.append({
+                'filename': filename, 'proof_name': proof_env.proof['name'], 'success': success,
+                'proof_gt': [step['command'][0] for step in proof_env.proof['steps'] if step['command'][1] != 'VernacEndProof'],
+                'proof_pred': proof_pred,
+                'time': time,
+                'num_tactics': num_tactics,})
+            if proof_name is not None:
+                return results
+        return results
+
+
     def evaluate(self, filename, proof_name=None):
         if self.model is not None:
             self.model.eval()
@@ -262,6 +302,8 @@ class Agent:
         obs = proof_env.init()
         env = filter_env(obs['env'])
         first_goal_signatures = {get_goal_signature(obs['fg_goals'][0])}
+        print("FG goals:", obs['fg_goals'][0])
+        # pdb.set_trace()
 
         # initialize the stack
         local_context, goal = parse_goal(obs['fg_goals'][0])
@@ -285,8 +327,8 @@ class Agent:
                 tac, logprob = stack[-1].pop()
 
             obs = proof_env.step(tac)
-            print(obs['result'])
-            print_goals(obs)
+            # print(obs['result'])
+            # print_goals(obs)
 
             if obs['result'] == 'SUCCESS':
                 script.append(tac)
@@ -314,7 +356,7 @@ class Agent:
                 stack.append([(tac_template % tac.to_tokens(), logprob+torch.log(prob)) for tac, prob in tactics[::-1]])
 
         obs = proof_env.step('Admitted.')
-        print(obs['result'])
+        # print(obs['result'])
         time = self.opts.timeout - obs['time_left']
         num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
 

@@ -24,8 +24,11 @@ if __name__ == '__main__':
     parser.add_argument('--datapath', type=str, default='../data')
     parser.add_argument('--projs_split', type=str, default='../projs_split.json')
     parser.add_argument('--split', choices=['train', 'valid', 'test'], type=str, default='test')
+    # Custom
     parser.add_argument('--gpu', type=int)
     parser.add_argument('--folder', type=str)
+    parser.add_argument('--coagulate', action='store_true')
+    # End Custom
     parser.add_argument('--file', type=str)
     parser.add_argument('--proof', type=str)
     parser.add_argument('--filter', type=str)
@@ -96,7 +99,11 @@ if __name__ == '__main__':
     for i, f in enumerate(files):
         print('file: ', f)
         #print('cuda memory allocated before file: ', torch.cuda.memory_allocated(opts.device), file=sys.stderr)
-        results.extend(agent.evaluate(f, opts.proof))
+        if opts.coagulate:
+            intermed = agent.gloop_evaluate(f, opts.proof)
+            results.extend(intermed)
+        else:
+            results.extend(agent.evaluate(f, opts.proof))
         bar.update(i)
 
     oup_dir = os.path.join(opts.output_dir, opts.eval_id)

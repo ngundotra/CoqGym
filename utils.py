@@ -196,6 +196,12 @@ def update_env(env, env_delta):
     env['inductives'] = [induct for induct in env['inductives'] if induct['physical_path'] not in to_remove]
     return env
 
+def coagulate_env(env, env_delta):
+    # add
+    env['constants'].extend(env_delta['add']['constants'])
+    env['inductives'].extend(env_delta['add']['inductives'])
+    return env
+
 
 def iter_proofs(data_root, callback, include_synthetic=False, show_progress=False):
     def iter_proofs_in_file(filename, file_data):

@@ -147,7 +147,7 @@ class TacticDecoder(nn.Module):
     def expand_node_set_pred(self, node, rule, stack):
         node.expand(rule)
 
-        # updat the links to the predecessor
+        # update the links to the predecessor
         for c in node.children[::-1]:
             if isinstance(c, Token):
                 continue
@@ -520,6 +520,121 @@ class TacticDecoder(nn.Module):
                     for cand in candidates:
                         beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob, cand))
 
+            # expand the nodes and update the beam
+            beam_candidates = sorted(beam_candidates, key=lambda x: x[1], reverse=True)[:self.opts.beam_width]
+            new_beam = []
+            new_frontiers = []
+            new_log_likelihood = []
+            for idx, log_cond_prob, action in beam_candidates:
+                ast, stack = self.duplicate(beam[idx], frontiers[idx])
+                node = stack.pop()
+                if isinstance(action, int):  # expand a nonterimial node
+                    rule = self.grammar.production_rules[action]
+                    self.expand_node_set_pred(node, rule, stack)
+                else:  # expand a terminal node
+                    node.expand(action)
+                new_beam.append(ast)
+                new_frontiers.append(stack)
+                new_log_likelihood.append(log_likelihood[idx] + log_cond_prob)
+            beam = new_beam
+            frontiers = new_frontiers
+            log_likelihood = new_log_likelihood
+            expansion_step += 1
+
+        complete_trees = sorted(complete_trees, key=lambda x: x[1], reverse=True)  # pick the top ASTs
+        return complete_trees[:self.opts.num_tactic_candidates]
+
+    def simple_search(self, environment, local_context, goal):
+        """
+        Uses torch.random_sample to choose a random node to expand, return that (tree?)
+        """
+        # initialize the trees in the beam
+        assert goal['embeddings'].size(0) == 1  # only support batchsize == 1
+        beam, frontiers = self.initialize_trees(1)
+        log_likelihood = [0.]  # the (unnormalized) objective function maximized by the beam search
+        complete_trees = []  # the complete ASTs generated during the beam search
+
+        expansion_step = 0
+        while True:
+            # collect inputs from all partial trees
+            indice, s_tm1, a_tm1, p_t, n_t = self.gather_frontier_info(frontiers)
+            # check if there are complete trees 
+            for i in range(len(beam)):
+                if i not in indice:
+                    normalized_log_likelihood = log_likelihood[i] / (expansion_step ** self.opts.lens_norm)  # length normalization
+                    beam[i].traverse_pre(clear_state) 
+                    complete_trees.append((beam[i], normalized_log_likelihood))
+            if indice == []:  # all trees are complete, terminate the beam search
+                break
+
+            r = [torch.cat([environment['embeddings'], local_context['embeddings']], dim=0) for i in indice]
+            u_t = self.context_reader(s_tm1, r)
+
+            states = self.controller(torch.cat([a_tm1, goal['embeddings'].expand(len(indice), -1), u_t, p_t, n_t], dim=1), s_tm1)
+
+            # compute the log likelihood and pick the top candidates
+            beam_candidates = []
+            pdb.set_trace()
+            for j, idx in enumerate(indice):
+                stack = frontiers[idx]
+                node = stack[-1]
+                node.state = states[j]
+
+                if isinstance(node, NonterminalNode):
+                    applicable_rules = self.grammar.get_applicable_rules(node.symbol)
+                    if expansion_step > self.opts.size_limit:  # end the generation process asap
+                        beam_candidates.append((idx, log_likelihood[i], applicable_rules[0]))
+                    else:
+                        logits = torch.matmul(self.production_rule_embeddings.weight[applicable_rules], self.state_decoder(node.state))
+                        log_cond_prob = logits - logits.logsumexp(dim=0)
+
+                        # Here we randomly sample weighted by log_cond_prob :) PoG
+                        np.random.choice(np.arange(len(applicable_rules)), p=log_cond_prob)
+                        for n, cand in enumerate(applicable_rules):
+                            beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob[n], cand))
+
+                elif node.symbol in ['QUALID', 'LOCAL_IDENT']:
+                    if node.symbol == 'QUALID':
+                        candidates = environment['idents'] + local_context['idents']
+                    else:
+                        candidates = local_context['idents']
+                    if candidates == []:
+                        candidates = ['H'] + goal['quantified_idents']
+                        log_cond_prob = - math.log(len(candidates))
+                        for cand in candidates:
+                            beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob, cand))
+                    else:
+                        if node.symbol == 'QUALID':
+                            candidate_embeddings = torch.cat([environment['embeddings'], local_context['embeddings']])
+                        else:
+                            candidate_embeddings = local_context['embeddings']
+                        context_scores = self.context_retriever(node.state, candidate_embeddings)
+                        log_cond_prob = context_scores - context_scores.logsumexp(dim=0)
+                        for n, cand in enumerate(candidates):
+                            beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob[n], cand))
+                       
+                elif node.symbol == 'INT':
+                    cls = self.INT_classifier(node.state)
+                    log_cond_prob = cls - cls.logsumexp(dim=0)
+                    for n in range(cls.size(0)):
+                        beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob[n], str(n + 1)))
+
+                elif node.symbol == 'HINT_DB':
+                    cls = self.HINT_DB_classifier(node.state)
+                    log_cond_prob = cls - cls.logsumexp(dim=0)
+                    for n in range(cls.size(0)):
+                        beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob[n], self.hint_dbs[n]))
+              
+                elif node.symbol == 'QUANTIFIED_IDENT':
+                    if len(goal['quantified_idents']) > 0:
+                        candidates = list(goal['quantified_idents'])
+                    else:
+                        candidates = ['x']
+                    log_cond_prob = - math.log(len(candidates))
+                    for cand in candidates:
+                        beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob, cand))
+
+            assert len(beam_candidates) == 1
             # expand the nodes and update the beam
             beam_candidates = sorted(beam_candidates, key=lambda x: x[1], reverse=True)[:self.opts.beam_width]
             new_beam = []

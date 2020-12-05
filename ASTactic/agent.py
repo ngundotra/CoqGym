@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn.functional as F
 import os
@@ -153,14 +154,14 @@ class Agent:
 
                     probs = [t[-1] for t in trajectories]
                     probs = torch.cat([p.unsqueeze(0) for p in probs]) 
-                    probs = probs / torch.exp(probs)
+                    # probs = probs * torch.exp(probs)
                     wins = torch.Tensor([t[0] for t in trajectories]).to(probs.device)
                     # If we have all failures, use backup signal
-                    alpha_backup = 0.05
-                    expanded = torch.Tensor([t[-2] for t in trajectories]).to(probs.device)
-                    signal = alpha_backup*(expanded - expanded.mean()) / (1e-8 + expanded.std())
-                    signal += 2*(wins-0.5)
-                    print(expanded)
+                    # alpha_backup = 0.05
+                    # expanded = torch.Tensor([t[-2] for t in trajectories]).to(probs.device)
+                    # signal = alpha_backup*(expanded - expanded.mean()) / (1e-8 + expanded.std())
+                    # signal += 2*(wins-0.5)
+                    # print(expanded)
                     # loss = -torch.multiply(probs, signal).mean()
                     if loss is None:
                         loss = -(probs*(2*(wins-0.5))).mean()
@@ -182,6 +183,7 @@ class Agent:
                     # proof_env.serapi = proof_env.initialize_serapi()
             self.optimizer.zero_grad()
             loss.backward()
+            pdb.set_trace()
             self.optimizer.step()
             # print(leaderboard)
 
@@ -383,8 +385,6 @@ class Agent:
             obs = proof_env.step(tac)
             fg_goals, bg_goals, shelved_goals, _ = proof_env.serapi.query_goals()
             max_goal = max(len(fg_goals)+len(bg_goals)+len(shelved_goals), max_goal)
-            # print(obs['result'])
-            # print_goals(obs)
 
             if obs['result'] == 'SUCCESS':
                 script.append(tac)
@@ -413,7 +413,13 @@ class Agent:
                 first_goal_signatures.add(sig)
                 local_context, goal = parse_goal(obs['fg_goals'][0])
                 tactics = self.model.beam_search(env, local_context, goal, train)
-                stack.append([(tac_template % tac.to_tokens(), logprob + prob, max_goal) for tac, prob in tactics[::-1]])
+
+                # Sample a tactic to apply
+                tactic_probs = np.exp([t[1].cpu().detach().numpy() for t in tactics])
+                tactic_probs = tactic_probs / sum(tactic_probs)
+                sampled_idx = np.random.choice(np.arange(len(tactics)), p=tactic_probs)
+                tac, prob = tactics[sampled_idx]
+                stack.append([(tac_template % tac.to_tokens(), logprob + prob, max_goal)])
 
         obs = proof_env.step('Admitted.')
         # print(obs['result'])

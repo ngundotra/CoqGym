@@ -142,6 +142,7 @@ class Agent:
             with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer,
                         hammer_timeout=hammer_timeout) as file_env:
                 results = []
+                loss = None
                 for proof_env in file_env:  # start a proof
                     curr_name = proof_env.proof['name']
                     if proof_name is not None and curr_name != proof_name:
@@ -161,25 +162,28 @@ class Agent:
                     signal += 2*(wins-0.5)
                     print(expanded)
                     # loss = -torch.multiply(probs, signal).mean()
-                    loss = -(probs*(2*(wins-0.5))).mean()
+                    if loss is None:
+                        loss = -(probs*(2*(wins-0.5))).mean()
+                    else:
+                        loss += -(probs*(2*(wins-0.5))).mean()
                     if torch.isnan(loss):
                         print("=======NAN=======")
                         pdb.set_trace()
 
-                    self.optimizer.zero_grad()
-                    loss.backward()
-                    self.optimizer.step()
 
-                    if curr_name not in leaderboard:
-                        leaderboard[curr_name] = [loss.item(), torch.mean(wins)]
-                    elif loss < leaderboard[curr_name][0]:
-                        leaderboard[curr_name] = [loss.item(), torch.mean(wins)]
+                    # if curr_name not in leaderboard:
+                    #     leaderboard[curr_name] = [loss.item(), torch.mean(wins)]
+                    # elif loss < leaderboard[curr_name][0]:
+                    #     leaderboard[curr_name] = [loss.item(), torch.mean(wins)]
 
                     if proof_name is not None:
                         break
                     
                     # proof_env.serapi = proof_env.initialize_serapi()
-            print(leaderboard)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+            # print(leaderboard)
 
         #log('\ntraining losses: %f' % loss.item())
         return results

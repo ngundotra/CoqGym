@@ -428,15 +428,14 @@ class TacticDecoder(nn.Module):
                     node.expand(action)
                 new_beam.append(ast)
                 new_frontiers.append(stack)
-                new_log_likelihood.append(log_likelihood[idx] + log_cond_prob)
+                new_log_likelihood.append(log_cond_prob)
             beam = new_beam
             frontiers = new_frontiers
             log_likelihood = new_log_likelihood
             expansion_step += 1
 
         complete_trees = sorted(complete_trees, key=lambda x: x[1], reverse=True)  # pick the top ASTs
-        return complete_trees[:self.opts.num_tactic_candidates]
-
+        return [t[0] for t in complete_trees[:self.opts.num_tactic_candidates]]
 
     def beam_search_train(self, environment, local_context, goal):
         # initialize the trees in the beam

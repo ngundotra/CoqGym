@@ -284,7 +284,7 @@ class Agent:
                     continue
                 print('proof: ', proof_env.proof['name'])
                 #print('cuda memory allocated before proof: ', torch.cuda.memory_allocated(self.opts.device), file=sys.stderr)
-                success, proof_pred, time, num_tactics, _ = self.prove(proof_env)
+                success, proof_pred, time, num_tactics = self.prove(proof_env)
                 results.append({
                     'filename': filename, 'proof_name': proof_env.proof['name'], 'success': success,
                     'proof_gt': [step['command'][0] for step in proof_env.proof['steps'] if step['command'][1] != 'VernacEndProof'],
@@ -320,9 +320,9 @@ class Agent:
         else:
             tac_template = '%s.'
 
-        if not train:
-            return self.prove_DFS(proof_env, tac_template)
-        return self.train_prove(proof_env, tac_template, train=True)
+        if train:
+            return self.train_prove(proof_env, tac_template, train=True)
+        return self.prove_DFS(proof_env, tac_template)
 
 
     def train_prove(self, proof_env, tac_template, train=False):

@@ -345,9 +345,11 @@ class Agent:
         """
         obs = proof_env.init()
         env = filter_env(obs['env'])
+        pdb.set_trace()
+        if 'fg_goals' not in obs:
+            print(proof_env.proof['name'])
+            pdb.set_trace()
         first_goal_signatures = {get_goal_signature(obs['fg_goals'][0])}
-        print("FG goals:", obs['fg_goals'][0])
-        # pdb.set_trace()
 
         # initialize the stack
         local_context, goal = parse_goal(obs['fg_goals'][0])

@@ -69,7 +69,6 @@ class Prover(nn.Module):
 
 
     def beam_search(self, environment, local_context, goal, train=False):
-        assert train == False
         environment_embeddings, context_embeddings, goal_embeddings = \
           self.embed_terms([environment], [local_context], [goal])
         environment = {'idents': [v['qualid'] for v in environment],

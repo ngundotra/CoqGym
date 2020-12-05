@@ -138,7 +138,7 @@ class Agent:
         # TODO: train with training `data_batch` instead. Create `proof_env` for each data.
         # {proof_name: [lowest loss, success]}
         leaderboard = {}
-        for _ in range(n_epoch):
+        for curr_epoch in range(n_epoch):
             with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer,
                         hammer_timeout=hammer_timeout) as file_env:
                 results = []
@@ -160,8 +160,11 @@ class Agent:
                     signal = alpha_backup*(expanded - expanded.mean()) / (1e-8 + expanded.std())
                     signal += 2*(wins-0.5)
                     print(expanded)
-                    # pdb.set_trace()
-                    loss = -torch.multiply(probs, signal).mean()
+                    # loss = -torch.multiply(probs, signal).mean()
+                    loss = -(probs*(2*(wins-0.5))).mean()
+                    if torch.isnan(loss):
+                        print("=======NAN=======")
+                        pdb.set_trace()
 
                     self.optimizer.zero_grad()
                     loss.backward()
@@ -320,6 +323,7 @@ class Agent:
         else:
             tac_template = '%s.'
 
+        # pdb.set_trace()
         if train:
             return self.train_prove(proof_env, tac_template, train=True)
         return self.prove_DFS(proof_env, tac_template)
@@ -345,7 +349,7 @@ class Agent:
         """
         obs = proof_env.init()
         env = filter_env(obs['env'])
-        pdb.set_trace()
+        # pdb.set_trace()
         if 'fg_goals' not in obs:
             print(proof_env.proof['name'])
             pdb.set_trace()
@@ -383,7 +387,7 @@ class Agent:
                 time = self.opts.timeout - obs['time_left']
                 num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
                 prob_list.append((True, script, time, num_tactics, max_goal, logprob))
-                continue
+                return prob_list
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
                 time = self.opts.timeout - obs['time_left']
                 num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
@@ -395,6 +399,7 @@ class Agent:
                 prob_list.append((False, script, time, num_tactics, max_goal, logprob))
                 continue
             else:
+                assert obs['result'] == 'PROVING', "{}".format(obs['result'])
                 script.append(tac)
                 sig = get_goal_signature(obs['fg_goals'][0])
                 if sig in first_goal_signatures or len(script) >= self.opts.depth_limit:

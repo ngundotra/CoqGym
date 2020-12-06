@@ -152,15 +152,15 @@ class Agent:
                     if sample == 'DFS':
                         samples, Nsa, Ns = self.prove(proof_env, train=True, sample=sample) # TODO: control number of samples better
 
-                        losses_env = [(Ns[state]/Nsa[state][action]).to(logprob.device)
+                        losses_env = [((Ns[state]/Nsa[state][action]).to(logprob.device)
                                       * (-logprob)
-                                      * reward.to(logprob.device)
+                                      * reward).to(logprob.device)
                                       for state, action, logprob, reward in samples]
                     elif sample == 'vanilla':
                         samples = self.prove(proof_env, train=True, sample=sample) # TODO: control number of samples
 
-                        losses_env = [(-logprob)
-                                      * reward.to(logprob.device)
+                        losses_env = [((-logprob)
+                                      * reward).to(logprob.device).unsqueeze(0)
                                       for logprob, reward in samples]
                     else:
                         raise ValueError('Sampling method not found.')
@@ -173,9 +173,9 @@ class Agent:
                     # print(expanded)
                     # loss = -torch.multiply(probs, signal).mean()
                     if loss is None:
-                        loss = torch.cat(losses_env, 0).mean()
+                        loss = torch.cat(losses_env).mean()
                     else:
-                        loss += torch.cat(losses_env, 0).mean()
+                        loss += torch.cat(losses_env).mean()
                     if torch.isnan(loss):
                         print("=======NAN=======")
                         pdb.set_trace()
@@ -370,7 +370,7 @@ class Agent:
         local_context, goal = parse_goal(obs['fg_goals'][0])
         tactics = self.model.beam_search(env, local_context, goal, train)
         tacs = [tac_template % tac.to_tokens() for tac, _ in tactics]
-        probs = [prob for _, prob in tactics]
+        probs = torch.cat([prob.unsqueeze(0) for _, prob in tactics])
         script = []
 
         steps = 0
@@ -396,6 +396,7 @@ class Agent:
                 samples = [(logprob, -0.1) for logprob in prob_list]
                 return samples
             else:
+                assert obs['result'] == 'PROVING'
                 script.append(tac)
                 sig = get_goal_signature(obs['fg_goals'][0]) #TODO: should we care about this in sampling?
                 if sig in first_goal_signatures:
@@ -411,7 +412,7 @@ class Agent:
                 local_context, goal = parse_goal(obs['fg_goals'][0])
                 tactics = self.model.beam_search(env, local_context, goal, train)
                 tacs = [tac_template % tac.to_tokens() for tac, _ in tactics]
-                probs = [prob for _, prob in tactics]
+                probs = torch.cat([prob.unsqueeze(0) for _, prob in tactics])
 
         raise RuntimeError('huh?')
 

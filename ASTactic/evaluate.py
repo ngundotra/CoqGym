@@ -30,6 +30,7 @@ if __name__ == '__main__':
     parser.add_argument('--coagulate', action='store_true')
     parser.add_argument('--train_rl', action='store_true')
     parser.add_argument('--sample', choices=['vanilla', 'DFS'], type=str, default='DFS')
+    parser.add_argument('--epochs', type=int, default=1)
     # End Custom
     parser.add_argument('--file', type=str)
     parser.add_argument('--proof', type=str)
@@ -110,7 +111,7 @@ if __name__ == '__main__':
             intermed = agent.gloop_evaluate(f, opts.proof)
             results.extend(intermed)
         elif opts.train_rl:
-            results.extend(agent.train_RL(15, f, opts.proof, opts.sample))
+            results.extend(agent.train_RL(opts.epochs, f, opts.proof, opts.sample))
         else:
             results.extend(agent.evaluate(f, opts.proof))
         bar.update(i)

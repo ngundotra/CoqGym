@@ -139,6 +139,8 @@ class Agent:
         # {proof_name: [lowest loss, success]}
         leaderboard = {}
         for curr_epoch in range(n_epoch):
+            print("\n---EPOCH---")
+            print("-----{}-----\n".format(curr_epoch))
             with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer,
                          hammer_timeout=hammer_timeout) as file_env:
                 results = []
@@ -180,21 +182,17 @@ class Agent:
                         print("=======NAN=======")
                         pdb.set_trace()
 
-                    # if curr_name not in leaderboard:
-                    #     leaderboard[curr_name] = [loss.item(), torch.mean(wins)]
-                    # elif loss < leaderboard[curr_name][0]:
-                    #     leaderboard[curr_name] = [loss.item(), torch.mean(wins)]
-
                     if proof_name is not None:
                         break
 
                     # proof_env.serapi = proof_env.initialize_serapi()
+            print("\tLoss: {}".format(loss.item()))
             self.optimizer.zero_grad()
             loss.backward()
-            pdb.set_trace()
+            # pdb.set_trace()
             self.optimizer.step()
-            # print(leaderboard)
 
+        self.save(n_epoch, "train-ckpt/")
         # log('\ntraining losses: %f' % loss.item())
         return results
 
@@ -346,13 +344,7 @@ class Agent:
         return self.prove_DFS(proof_env, tac_template)
 
     def sample(self, proof_env, tac_template, train=False):
-        n_trajectories = 30 #TODO: tune
-
-        samples = []
-        for _ in range(n_trajectories):
-            samples.extend(self.sample_once(proof_env, tac_template, train))
-
-        return samples
+        return self.sample_once(proof_env, tac_template, train)
 
     def sample_once(self, proof_env, tac_template, train=False):
         obs = proof_env.init()
@@ -393,8 +385,9 @@ class Agent:
                 samples = [(logprob, -0.1) for logprob in prob_list] #TODO: set reward to 0 or -0.1?
                 return samples
             elif obs['result'] in ['ERROR']:  # Tactic is misapplied, nothing happened
-                samples = [(logprob, -0.1) for logprob in prob_list]
-                return samples
+                # samples = [(logprob, -0.1) for logprob in prob_list]
+                # return samples
+                continue
             else:
                 assert obs['result'] == 'PROVING'
                 script.append(tac)
@@ -540,8 +533,8 @@ class Agent:
                 tac = stack[-1].pop()
 
             obs = proof_env.step(tac)
-            print(obs['result'])
-            print_goals(obs)
+            # print(obs['result'])
+            # print_goals(obs)
 
             if obs['result'] == 'SUCCESS':
                 script.append(tac)

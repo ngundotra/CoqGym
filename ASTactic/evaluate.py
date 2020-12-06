@@ -28,7 +28,8 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', type=int)
     parser.add_argument('--folder', type=str)
     parser.add_argument('--coagulate', action='store_true')
-    parser.add_argument('--train_dfs', action='store_true')
+    parser.add_argument('--train_rl', action='store_true')
+    parser.add_argument('--sample', choices=['vanilla', 'DFS'], type=str, default='DFS')
     # End Custom
     parser.add_argument('--file', type=str)
     parser.add_argument('--proof', type=str)
@@ -77,7 +78,7 @@ if __name__ == '__main__':
         model = None
 
     optimizer = None
-    if opts.train_dfs:
+    if opts.train_rl:
         optimizer = torch.optim.RMSprop(model.parameters(), lr=3e-5,
                                         momentum=0.9,
                                         weight_decay=1e-6)
@@ -108,8 +109,8 @@ if __name__ == '__main__':
         if opts.coagulate:
             intermed = agent.gloop_evaluate(f, opts.proof)
             results.extend(intermed)
-        elif opts.train_dfs:
-            results.extend(agent.train_DFS(15, f, opts.proof))
+        elif opts.train_rl:
+            results.extend(agent.train_RL(15, f, opts.proof, opts.sample))
         else:
             results.extend(agent.evaluate(f, opts.proof))
         bar.update(i)

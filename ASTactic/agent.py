@@ -32,6 +32,7 @@ def action_seq_loss(logits_batch, actions_batch, opts):
 term_parser = GallinaTermParser(caching=True)
 sexp_cache = SexpCache('../sexp_cache', readonly=True)
 
+
 def filter_env(env):
     filtered_env = []
     for const in [const for const in env['constants'] if const['qualid'].startswith('SerTop')][-10:]:
@@ -40,7 +41,7 @@ def filter_env(env):
     return filtered_env
 
 
-def parse_goal(g): 
+def parse_goal(g):
     goal = {'id': g['id'], 'text': g['type'], 'ast': term_parser.parse(g['sexp'])}
     local_context = []
     for i, h in enumerate(g['hypotheses']):
@@ -84,12 +85,11 @@ def get_goal_signature(goal):
 class Agent:
 
     def __init__(self, model, optimizer, dataloader, opts):
-      self.model = model
-      self.optimizer = optimizer
-      self.dataloader = dataloader
-      self.opts = opts
-      self.projs_split = json.load(open(opts.projs_split))
-
+        self.model = model
+        self.optimizer = optimizer
+        self.dataloader = dataloader
+        self.opts = opts
+        self.projs_split = json.load(open(opts.projs_split))
 
     def train(self, n_epoch):
         self.model.train()
@@ -98,12 +98,12 @@ class Agent:
         bar = ProgressBar(max_value=len(self.dataloader['train']))
         for i, data_batch in enumerate(self.dataloader['train']):
             use_teacher_forcing = random() < self.opts.teacher_forcing
-            asts, loss = self.model(data_batch['env'], data_batch['local_context'], 
+            asts, loss = self.model(data_batch['env'], data_batch['local_context'],
                                     data_batch['goal'], data_batch['tactic_actions'], use_teacher_forcing)
             log('\nteacher forcing = %s, loss = %f' % (str(use_teacher_forcing), loss.item()))
             self.optimizer.zero_grad()
             loss.backward()
-            self.optimizer.step() 
+            self.optimizer.step()
             gc.collect()
             bar.update(i)
             if self.opts.smoke and i == 11:
@@ -111,8 +111,7 @@ class Agent:
 
         log('\ntraining losses: %f' % loss)
 
-
-    def train_DFS(self, n_epoch, filename, proof_name=None):
+    def train_RL(self, n_epoch, filename, proof_name=None, sample='DFS'):
         """
         TODO:
             - reset the env
@@ -141,7 +140,7 @@ class Agent:
         leaderboard = {}
         for curr_epoch in range(n_epoch):
             with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer,
-                        hammer_timeout=hammer_timeout) as file_env:
+                         hammer_timeout=hammer_timeout) as file_env:
                 results = []
                 loss = None
                 for proof_env in file_env:  # start a proof
@@ -150,12 +149,22 @@ class Agent:
                         continue
                     print('proof: ', proof_env.proof['name'])
                     # success, proof_pred, time, num_tactics, trajectory = self.prove(proof_env, train=True)
-                    trajectories = self.prove(proof_env, train=True)
+                    if sample == 'DFS':
+                        samples, Nsa, Ns = self.prove(proof_env, train=True, sample=sample) # TODO: control number of samples better
 
-                    probs = [t[-1] for t in trajectories]
-                    probs = torch.cat([p.unsqueeze(0) for p in probs]) 
-                    # probs = probs * torch.exp(probs)
-                    wins = torch.Tensor([t[0] for t in trajectories]).to(probs.device)
+                        losses_env = [(Ns[state]/Nsa[state][action]).to(logprob.device)
+                                      * (-logprob)
+                                      * reward.to(logprob.device)
+                                      for state, action, logprob, reward in samples]
+                    elif sample == 'vanilla':
+                        samples = self.prove(proof_env, train=True, sample=sample) # TODO: control number of samples
+
+                        losses_env = [(-logprob)
+                                      * reward.to(logprob.device)
+                                      for logprob, reward in samples]
+                    else:
+                        raise ValueError('Sampling method not found.')
+
                     # If we have all failures, use backup signal
                     # alpha_backup = 0.05
                     # expanded = torch.Tensor([t[-2] for t in trajectories]).to(probs.device)
@@ -164,13 +173,12 @@ class Agent:
                     # print(expanded)
                     # loss = -torch.multiply(probs, signal).mean()
                     if loss is None:
-                        loss = -(probs*(2*(wins-0.5))).mean()
+                        loss = torch.cat(losses_env, 0).mean()
                     else:
-                        loss += -(probs*(2*(wins-0.5))).mean()
+                        loss += torch.cat(losses_env, 0).mean()
                     if torch.isnan(loss):
                         print("=======NAN=======")
                         pdb.set_trace()
-
 
                     # if curr_name not in leaderboard:
                     #     leaderboard[curr_name] = [loss.item(), torch.mean(wins)]
@@ -179,7 +187,7 @@ class Agent:
 
                     if proof_name is not None:
                         break
-                    
+
                     # proof_env.serapi = proof_env.initialize_serapi()
             self.optimizer.zero_grad()
             loss.backward()
@@ -187,9 +195,8 @@ class Agent:
             self.optimizer.step()
             # print(leaderboard)
 
-        #log('\ntraining losses: %f' % loss.item())
+        # log('\ntraining losses: %f' % loss.item())
         return results
-
 
     def valid(self, n_epoch):
         self.model.eval()
@@ -199,22 +206,21 @@ class Agent:
         num_correct = 0
         bar = ProgressBar(max_value=len(self.dataloader['valid']))
 
-
         for i, data_batch in enumerate(self.dataloader['valid']):
             asts, loss = self.model(data_batch['env'], data_batch['local_context'],
                                     data_batch['goal'], data_batch['tactic_actions'], False)
             loss_avg += loss.item()
 
             for n in range(len(data_batch['file'])):
-                 tac_gt = data_batch['tactic_str'][n]
-                 tac_pred = asts[n].to_tokens()
-                 if tac_gt.replace(' ', '') == tac_pred.replace(' ', ''):
-                     num_correct += 1
-                 predictions.append({'file_name': data_batch['file'][n], 
-                                     'proof_name': data_batch['proof_name'][n], 
-                                     'n_step': data_batch['n_step'][n],
-                                     'tac_gt': tac_gt, 
-                                     'tac_pred': tac_pred})
+                tac_gt = data_batch['tactic_str'][n]
+                tac_pred = asts[n].to_tokens()
+                if tac_gt.replace(' ', '') == tac_pred.replace(' ', ''):
+                    num_correct += 1
+                predictions.append({'file_name': data_batch['file'][n],
+                                    'proof_name': data_batch['proof_name'][n],
+                                    'n_step': data_batch['n_step'][n],
+                                    'tac_gt': tac_gt,
+                                    'tac_pred': tac_pred})
             gc.collect()
             bar.update(i)
             if self.opts.smoke and i == 11:
@@ -227,7 +233,6 @@ class Agent:
         acc = num_correct / len(predictions)
         log('validation accuracy: %f' % acc)
         return loss_avg
-
 
     def gloop_evaluate(self, filename, proof_name=None):
         if self.model is not None:
@@ -246,7 +251,8 @@ class Agent:
         assert 'hammer_' not in self.opts.method
         hammer_timeout = self.opts.hammer_timeout if 'ours' in self.opts.method else self.opts.timeout
 
-        with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer, hammer_timeout=hammer_timeout) as file_env:
+        with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer,
+                     hammer_timeout=hammer_timeout) as file_env:
             results = []
             # Combine constants, inductives, and foreground goals
             proof_env = file_env.coagulated_env()
@@ -254,20 +260,20 @@ class Agent:
             if proof_name is not None and proof_env.proof['name'] != proof_name:
                 return results
             print('proof: ', proof_env.proof['name'])
-            #print('cuda memory allocated before proof: ', torch.cuda.memory_allocated(self.opts.device), file=sys.stderr)
+            # print('cuda memory allocated before proof: ', torch.cuda.memory_allocated(self.opts.device), file=sys.stderr)
             success, proof_pred, time, num_tactics = self.prove(proof_env)
 
             # Append separate proof per goal n coagulated environment
             results.append({
                 'filename': filename, 'proof_name': proof_env.proof['name'], 'success': success,
-                'proof_gt': [step['command'][0] for step in proof_env.proof['steps'] if step['command'][1] != 'VernacEndProof'],
+                'proof_gt': [step['command'][0] for step in proof_env.proof['steps'] if
+                             step['command'][1] != 'VernacEndProof'],
                 'proof_pred': proof_pred,
                 'time': time,
-                'num_tactics': num_tactics,})
+                'num_tactics': num_tactics, })
             if proof_name is not None:
                 return results
         return results
-
 
     def evaluate(self, filename, proof_name=None):
         if self.model is not None:
@@ -286,29 +292,30 @@ class Agent:
         assert 'hammer_' not in self.opts.method
         hammer_timeout = self.opts.hammer_timeout if 'ours' in self.opts.method else self.opts.timeout
 
-        with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer, hammer_timeout=hammer_timeout) as file_env:
+        with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer,
+                     hammer_timeout=hammer_timeout) as file_env:
             results = []
             for proof_env in file_env:  # start a proof
                 if proof_name is not None and proof_env.proof['name'] != proof_name:
                     continue
                 print('proof: ', proof_env.proof['name'])
-                #print('cuda memory allocated before proof: ', torch.cuda.memory_allocated(self.opts.device), file=sys.stderr)
+                # print('cuda memory allocated before proof: ', torch.cuda.memory_allocated(self.opts.device), file=sys.stderr)
                 success, proof_pred, time, num_tactics = self.prove(proof_env)
                 results.append({
                     'filename': filename, 'proof_name': proof_env.proof['name'], 'success': success,
-                    'proof_gt': [step['command'][0] for step in proof_env.proof['steps'] if step['command'][1] != 'VernacEndProof'],
+                    'proof_gt': [step['command'][0] for step in proof_env.proof['steps'] if
+                                 step['command'][1] != 'VernacEndProof'],
                     'proof_pred': proof_pred,
                     'time': time,
-                    'num_tactics': num_tactics,})
+                    'num_tactics': num_tactics, })
                 if proof_name is not None:
                     break
         return results
 
-
     def prove_one_tactic(self, proof_env, tac):
         obs = proof_env.init()
         print_goals(obs)
-        obs = proof_env.step(tac + '.') 
+        obs = proof_env.step(tac + '.')
         print(obs['result'])
         print_goals(obs)
         time = self.opts.timeout - obs['time_left']
@@ -317,8 +324,7 @@ class Agent:
         else:
             return False, [tac], time, 1
 
-
-    def prove(self, proof_env, train=False):
+    def prove(self, proof_env, train=False, sample='DFS'):
         'prove a theorem interactively'
         if 'ours' not in self.opts.method:  # auto, hammer, etc.
             return self.prove_one_tactic(proof_env, self.opts.method)
@@ -331,28 +337,97 @@ class Agent:
 
         # pdb.set_trace()
         if train:
-            return self.train_prove(proof_env, tac_template, train=True)
+            if sample == 'DFS':
+                return self.sample_DFS(proof_env, tac_template, train=True)
+            elif sample == 'vanilla':
+                return self.sample(proof_env, tac_template, train=True)
+            else:
+                raise ValueError('Sampling method not found.')
         return self.prove_DFS(proof_env, tac_template)
 
+    def sample(self, proof_env, tac_template, train=False):
+        n_trajectories = 30 #TODO: tune
 
-    def train_prove(self, proof_env, tac_template, train=False):
+        samples = []
+        for _ in range(n_trajectories):
+            samples.extend(self.sample_once(proof_env, tac_template, train))
+
+        return samples
+
+    def sample_once(self, proof_env, tac_template, train=False):
+        obs = proof_env.init()
+        env = filter_env(obs['env'])
+
+        if 'fg_goals' not in obs:
+            print(proof_env.proof['name'])
+            pdb.set_trace()
+        first_goal_signatures = {get_goal_signature(obs['fg_goals'][0])}
+
+        # store logprobs (along the trajectory) to be rewarded later
+        prob_list = []
+
+        # initialize
+        local_context, goal = parse_goal(obs['fg_goals'][0])
+        tactics = self.model.beam_search(env, local_context, goal, train)
+        tacs = [tac_template % tac.to_tokens() for tac, _ in tactics]
+        probs = [prob for _, prob in tactics]
+        script = []
+
+        steps = 0
+        while True and steps < 1e3:
+            steps += 1
+
+            m = torch.distributions.Categorical(probs)
+            idx = m.sample()
+            tac, prob = tacs[idx], probs[idx]
+
+            prob_list.append(prob)
+            obs = proof_env.step(tac)
+            fg_goals, bg_goals, shelved_goals, _ = proof_env.serapi.query_goals()
+
+            if obs['result'] == 'SUCCESS':
+                script.append(tac)
+                samples = [(logprob, 1) for logprob in prob_list]
+                return samples
+            elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
+                samples = [(logprob, -0.1) for logprob in prob_list] #TODO: set reward to 0 or -0.1?
+                return samples
+            elif obs['result'] in ['ERROR']:  # Tactic is misapplied, nothing happened
+                samples = [(logprob, -0.1) for logprob in prob_list]
+                return samples
+            else:
+                script.append(tac)
+                sig = get_goal_signature(obs['fg_goals'][0]) #TODO: should we care about this in sampling?
+                if sig in first_goal_signatures:
+                    proof_env.step('Undo.')
+                    script.pop()
+                    continue
+                first_goal_signatures.add(sig)
+
+                if len(script) >= self.opts.depth_limit:
+                    samples = [(logprob, -0.1) for logprob in prob_list]  #TODO: set reward to 0 or -0.1?
+                    return samples
+
+                local_context, goal = parse_goal(obs['fg_goals'][0])
+                tactics = self.model.beam_search(env, local_context, goal, train)
+                tacs = [tac_template % tac.to_tokens() for tac, _ in tactics]
+                probs = [prob for _, prob in tactics]
+
+        raise RuntimeError('huh?')
+
+    def sample_DFS(self, proof_env, tac_template, train=True):
         """
         Single attempt to prove something
         ENDS
             - when error happens
             - when success is reached
             - when timelimit hit
-
-
-        TODO:
-            - collect a SINGLE trajectory
-            - on ERROR: just add sample
-            - on TIMEOUT: return samples
-            - on SUCCESS: return samples
-            - replace beam search with sampling
-
-        sample = logprob of action taken (?)
         """
+        # number of time state, action tuple is visited
+        Nsa = {}
+        # number of time state is visited
+        Ns = {}
+
         obs = proof_env.init()
         env = filter_env(obs['env'])
         # pdb.set_trace()
@@ -361,18 +436,21 @@ class Agent:
             pdb.set_trace()
         first_goal_signatures = {get_goal_signature(obs['fg_goals'][0])}
 
-        # initialize the stack
+        # store samples to be returned
+        sample_list = []
+
+        # store logprobs (along the trajectory) to be rewarded later
+        prob_list = []
+
+        # initialize
         local_context, goal = parse_goal(obs['fg_goals'][0])
         tactics = self.model.beam_search(env, local_context, goal, train)
-        stack = [[(tac_template % tac.to_tokens(), prob, 1) for tac, prob in tactics[::-1]]]
+        stack = [[(tac_template % tac.to_tokens(), prob) for tac, prob in tactics[::-1]]]
         script = []
-
-        # store logprobs to be rewarded later
-        prob_list = []
 
         # depth-first search starting from the trace
         while stack != [[]]:
-            #print('stack: ', stack)
+            # print('stack: ', stack)
             # pick a tactic
             if stack[-1] == []:  # all candidate have been tried, backtrack
                 stack.pop()
@@ -380,30 +458,48 @@ class Agent:
                 proof_env.step('Undo.')
                 continue
             else:
-                tac, logprob, max_goal = stack[-1].pop()
+                tac, logprob = stack[-1].pop()
 
+            obs_string = None #TODO: a string identifier for the current obs
+            tac_string = None #TODO: a string identifier for the current tac
+
+            # Nsa
+            if obs_string not in Nsa.keys():
+                Nsa[obs_string] = {}
+            if tac_string not in Nsa[obs_string].keys():
+                Nsa[obs_string][tac_string] = 1
+            else:
+                Nsa[obs_string][tac_string] += 1
+
+            # Ns
+            if obs_string not in Ns.keys():
+                Ns[obs_string] = 1
+            else:
+                Ns[obs_string] += 1
+
+            prob_list.append((obs_string, tac_string, logprob))
             obs = proof_env.step(tac)
             fg_goals, bg_goals, shelved_goals, _ = proof_env.serapi.query_goals()
-            max_goal = max(len(fg_goals)+len(bg_goals)+len(shelved_goals), max_goal)
 
             if obs['result'] == 'SUCCESS':
                 script.append(tac)
-                time = self.opts.timeout - obs['time_left']
-                num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-                prob_list.append((True, script, time, num_tactics, max_goal, logprob))
-                return prob_list
+                samples = [(obs_string, tac_string, logprob, 1) for obs_string, tac_string, logprob in prob_list]
+                sample_list.extend(samples)
+                prob_list.pop(-1)
+                proof_env.step('Undo.') #TODO: find out whether this step is necessary
+                continue
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
-                time = self.opts.timeout - obs['time_left']
-                num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-                prob_list.append((False, script, time, num_tactics, max_goal, logprob))
-                return prob_list
-            elif obs['result'] in ['ERROR']: # Tactic is misapplied, nothing happened
-                time = self.opts.timeout - obs['time_left']
-                num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-                prob_list.append((False, script, time, num_tactics, max_goal, logprob))
+                # TODO: reassure that its the total number of tactics over the whole beam search but not along the trajectory.
+                #       Change the reward to -0.1 if its the latter.
+                samples = [(obs_string, tac_string, logprob, 0) for obs_string, tac_string, logprob in prob_list]
+                sample_list.extend(samples)
+                return sample_list, Nsa, Ns
+            elif obs['result'] in ['ERROR']:  # Tactic is misapplied, nothing happened
+                samples = [(obs_string, tac_string, logprob, -0.1) for obs_string, tac_string, logprob in prob_list]  # TODO: scale the reward for failing
+                sample_list.extend(samples)
+                prob_list.pop(-1)
                 continue
             else:
-                assert obs['result'] == 'PROVING', "{}".format(obs['result'])
                 script.append(tac)
                 sig = get_goal_signature(obs['fg_goals'][0])
                 if sig in first_goal_signatures or len(script) >= self.opts.depth_limit:
@@ -413,20 +509,11 @@ class Agent:
                 first_goal_signatures.add(sig)
                 local_context, goal = parse_goal(obs['fg_goals'][0])
                 tactics = self.model.beam_search(env, local_context, goal, train)
-
-                # Sample a tactic to apply
-                tactic_probs = np.exp([t[1].cpu().detach().numpy() for t in tactics])
-                tactic_probs = tactic_probs / sum(tactic_probs)
-                sampled_idx = np.random.choice(np.arange(len(tactics)), p=tactic_probs)
-                tac, prob = tactics[sampled_idx]
-                stack.append([(tac_template % tac.to_tokens(), logprob + prob, max_goal)])
+                stack.append([(tac_template % tac.to_tokens(), prob) for tac, prob in tactics[::-1]])
 
         obs = proof_env.step('Admitted.')
         # print(obs['result'])
-        time = self.opts.timeout - obs['time_left']
-        num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-        prob_list.append((False, script, time, num_tactics, max_goal, logprob))
-        return prob_list
+        return sample_list, Nsa, Ns
 
     def prove_DFS(self, proof_env, tac_template):
         obs = proof_env.init()
@@ -441,7 +528,7 @@ class Agent:
 
         # depth-first search starting from the trace
         while stack != [[]]:
-            #print('stack: ', stack)
+            # print('stack: ', stack)
             # pick a tactic
             if stack[-1] == []:  # all candidate have been tried, backtrack
                 stack.pop()
@@ -527,7 +614,7 @@ class Agent:
                     obs = proof_env.step(tac)
                     print(obs['result'])
                     print_goals(obs)
-                     
+
                     if obs['result'] == 'SUCCESS':
                         script.append(tac)
                         time = self.opts.timeout - obs['time_left']
@@ -565,7 +652,6 @@ class Agent:
         time = self.opts.timeout - obs['time_left']
         num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
         return False, script, time, num_tactics
-         
 
     def save(self, n_epoch, dirname):
         torch.save({'state_dict': self.model.state_dict(), 'n_epoch': n_epoch,

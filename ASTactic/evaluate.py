@@ -5,7 +5,7 @@ from glob import glob
 import argparse
 import json
 import os
-import sys
+import sys, os
 sys.setrecursionlimit(100000)
 sys.path.append(os.path.normpath(os.path.dirname(os.path.realpath(__file__))))
 sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), '../')))
@@ -24,6 +24,14 @@ if __name__ == '__main__':
     parser.add_argument('--datapath', type=str, default='../data')
     parser.add_argument('--projs_split', type=str, default='../projs_split.json')
     parser.add_argument('--split', choices=['train', 'valid', 'test'], type=str, default='test')
+    # Custom
+    parser.add_argument('--gpu', type=int)
+    parser.add_argument('--folder', type=str)
+    parser.add_argument('--coagulate', action='store_true')
+    parser.add_argument('--train_rl', action='store_true')
+    parser.add_argument('--sample', choices=['vanilla', 'DFS'], type=str, default='DFS')
+    parser.add_argument('--epochs', type=int, default=1)
+    # End Custom
     parser.add_argument('--file', type=str)
     parser.add_argument('--project', type=str)
     parser.add_argument('--proof', type=str)
@@ -49,6 +57,9 @@ if __name__ == '__main__':
     opts.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if opts.device.type == 'cpu':
         log('using CPU', 'WARNING')
+    if opts.gpu:
+        print("Setting GPU to device {}".format(opts.gpu))
+        torch.cuda.set_device(opts.gpu)
 
     torch.manual_seed(opts.seed)
     torch.backends.cudnn.deterministic = True
@@ -68,12 +79,20 @@ if __name__ == '__main__':
     else:
         model = None
 
-    agent = Agent(model, None, None, opts)
+    optimizer = None
+    if opts.train_rl:
+        optimizer = torch.optim.RMSprop(model.parameters(), lr=3e-5,
+                                        momentum=0.9,
+                                        weight_decay=1e-6)
+    agent = Agent(model, optimizer, None, opts)
 
+    print(opts.file, opts.folder)
     if opts.file:
         files = [opts.file]
-    elif opts.project:
-        files = glob(os.path.join(opts.datapath, '%s/**/*.json' % opts.project), recursive=True)
+    elif opts.folder:
+        print("Folder!")
+        files = glob(os.path.join(opts.datapath, "{}/*json".format(opts.folder)), recursive=True)
+        print(files)
     else:
         files = []
         projs = json.load(open(opts.projs_split))['projs_' + opts.split]
@@ -89,13 +108,21 @@ if __name__ == '__main__':
     for i, f in enumerate(files):
         print('file: ', f)
         #print('cuda memory allocated before file: ', torch.cuda.memory_allocated(opts.device), file=sys.stderr)
-        results.extend(agent.evaluate(f, opts.proof))
+        if opts.coagulate:
+            intermed = agent.gloop_evaluate(f, opts.proof)
+            results.extend(intermed)
+        elif opts.train_rl:
+            results.extend(agent.train_RL(opts.epochs, f, opts.proof, opts.sample))
+        else:
+            results.extend(agent.evaluate(f, opts.proof))
         bar.update(i)
 
     oup_dir = os.path.join(opts.output_dir, opts.eval_id)
     if not os.path.exists(oup_dir):
          os.makedirs(oup_dir)
-    if opts.filter is None and opts.file is None:
+    if opts.folder:
+        oup_file = os.path.join(oup_dir, '{}-results.json'.format(opts.folder))
+    elif opts.filter is None and opts.file is None:
         oup_file = os.path.join(oup_dir, 'results.json')
     elif opts.file is None:
         oup_file = os.path.join(oup_dir, '%s.json' % opts.filter)
@@ -105,6 +132,7 @@ if __name__ == '__main__':
         oup_file = os.path.join(oup_dir, '%s-%s.json' % (os.path.sep.join(opts.file.split(os.path.sep)[2:]).replace(os.path.sep, '-'), opts.proof))
     opts = vars(opts)
     del opts['device']
+    os.makedirs(os.path.dirname(oup_file), exist_ok=True)
     json.dump({'options': opts, 'results': results}, open(oup_file, 'wt'))
     log('results saved to ' + oup_file)
 

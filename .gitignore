@@ -1,2 +1,6 @@
 *.vo
 *.pyc
+coq_projects/
+coq/
+coq-serapi/
+ASTactic/coqhammer/

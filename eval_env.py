@@ -6,7 +6,7 @@ from time import time
 from collections import OrderedDict
 import json
 import sexpdata
-from utils import update_env
+from utils import update_env, coagulate_env
 from gallina import GallinaTermParser
 import os
 from glob import glob
@@ -58,7 +58,7 @@ class ProofEnv:
         if self.failure:
             return self.feedback('ALREADY_FAILED')
         time_left = self.timeout - (time() - self.start_time)
-        print('%d: %s: %.02f' % (self.num_tactics_left, command, time_left))
+        # print('%d: %s: %.02f' % (self.num_tactics_left, command, time_left))
         if time_left <= 0:
             return self.feedback('MAX_TIME_REACHED')
 
@@ -158,6 +158,43 @@ class FileEnv:
         self.next_proof_idx = 0
         self.env = {'constants': [], 'inductives': []}
         return self
+
+
+    def coagulated_env(self):
+        """
+        Gloop all the constants & inductives together
+        """
+        # Setup things previously reserved for iteration
+        self.cmd_idx = 0
+        self.next_proof_idx = 0
+        self.env = {'constants': [], 'inductives': []}
+        # Gloop here
+        max_line_nb = 0
+        while self.next_proof_idx < len(self.proofs):
+            next_proof = self.proofs[self.next_proof_idx]
+            next_proof['env_delta']['subtract'] = {}
+            pdb.set_trace()
+            self.env = coagulate_env(self.env, next_proof['env_delta'])
+            # pdb.set_trace()
+            del next_proof['env_delta']
+            next_proof['env'] = self.env
+            if next_proof['line_nb'] > max_line_nb:
+                max_line_nb = next_proof['line_nb']
+            self.next_proof_idx += 1
+
+        if self.serapi.dead:
+            self.serapi = self.initialize_serapi()
+            self.cmd_idx = 0
+        elif self.next_proof_idx > 0:  # rollback to the start of the current proof
+            self.serapi.pop()
+
+        while self.cmd_idx <= next_proof['line_nb']:
+            cmd, _ = self.vernac_cmds[self.cmd_idx]
+            self.serapi.execute(cmd)
+            self.cmd_idx += 1
+
+        self.serapi.push()
+        return ProofEnv(next_proof, self.serapi, self.max_num_tactics, self.timeout)
  
 
     def __next__(self):
@@ -167,6 +204,7 @@ class FileEnv:
         pdb.set_trace()
         next_proof = self.proofs[self.next_proof_idx]
         self.env = update_env(self.env, next_proof['env_delta'])
+        # pdb.set_trace()
         del next_proof['env_delta']
         next_proof['env'] = self.env
 
@@ -183,6 +221,9 @@ class FileEnv:
             self.serapi = self.initialize_serapi()
             self.cmd_idx = 0
 
+        # pdb.set_trace()
+        print('name:', next_proof['name'])
+        print('line_nb:', next_proof['line_nb'])
         while self.cmd_idx <= next_proof['line_nb']:
             cmd, _ = self.vernac_cmds[self.cmd_idx]
             self.serapi.execute(cmd)

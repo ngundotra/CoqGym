@@ -68,7 +68,7 @@ class Prover(nn.Module):
         return asts, loss
 
 
-    def beam_search(self, environment, local_context, goal):
+    def beam_search(self, environment, local_context, goal, train=False):
         environment_embeddings, context_embeddings, goal_embeddings = \
           self.embed_terms([environment], [local_context], [goal])
         environment = {'idents': [v['qualid'] for v in environment],
@@ -78,5 +78,8 @@ class Prover(nn.Module):
                          'embeddings': context_embeddings[0],
                          'quantified_idents': [v['ast'].quantified_idents for v in local_context]}
         goal = {'embeddings': goal_embeddings, 'quantified_idents': goal.quantified_idents}
-        asts = self.tactic_decoder.beam_search(environment, local_context, goal)
+        if train:
+            asts = self.tactic_decoder.beam_search_train(environment, local_context, goal)
+        else:
+            asts = self.tactic_decoder.beam_search(environment, local_context, goal)
         return asts

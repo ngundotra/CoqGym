@@ -12,7 +12,8 @@ num_success = defaultdict(int)
 num_fail = defaultdict(int)
 avg_time = 0
 
-for f in glob(os.path.join(sys.argv[1], '*.json')):
+print(sys.argv[1])
+for f in glob(sys.argv[1]):
     results = json.load(open(f))['results']
     for r in results:
         proj = r['filename'].split(os.path.sep)[2]
@@ -28,6 +29,10 @@ for proj in set(num_success.keys()).union(set(num_fail.keys())):
     print('%50s:\t%.04f\t%d/%d' % (proj, num_success[proj] / (num_success[proj] + num_fail[proj]), num_success[proj], num_fail[proj]))
     total_success += num_success[proj]
     total_fail += num_fail[proj]
+
+if total_fail == 0 or total_success == 0:
+    print("Success", num_success)
+    print("Failure", num_fail)
 
 print('\nIN TOTAL:\t%.04f\t%d/%d' % (total_success / (total_success + total_fail), total_success, total_fail))
 print('avg_time', avg_time / total_success)

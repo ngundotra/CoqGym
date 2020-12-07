@@ -118,6 +118,7 @@ if __name__ == '__main__':
     iter_proofs(args.data_root, process_proof, include_synthetic=False, show_progress=True)
 
     for split in ['train', 'valid']:
+        print("Proof steps {}: {}".format(split, len(proof_steps[split])))
         for i, step in enumerate(proof_steps[split]):
             dirname = os.path.join(args.output, split)
             if not os.path.exists(dirname):

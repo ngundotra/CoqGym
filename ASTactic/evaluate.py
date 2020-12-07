@@ -29,6 +29,7 @@ if __name__ == '__main__':
     parser.add_argument('--folder', type=str)
     parser.add_argument('--coagulate', action='store_true')
     parser.add_argument('--train_rl', action='store_true')
+    parser.add_argument('--parallel_sample', action='store_true')
     parser.add_argument('--sample', choices=['vanilla', 'DFS'], type=str, default='DFS')
     parser.add_argument('--epochs', type=int, default=1)
     # End Custom

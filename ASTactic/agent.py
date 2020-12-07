@@ -137,7 +137,51 @@ class Agent:
 
         # TODO: train with training `data_batch` instead. Create `proof_env` for each data.
         # {proof_name: [lowest loss, success]}
-        leaderboard = {}
+        if sample == "vanilla":
+            self.train_RL_PG(n_epoch, filename, with_hammer, hammer_timeout)
+        elif sample == "DFS":
+            return self.train_RL_DFS(n_epochs, with_hammer, hammer_timeout)
+    
+
+    def train_RL_PG(self, n_epoch, epochs_per_update, with_hammer, hammer_timeout):
+        """
+        Collects hella samples for Policy Gradients.
+        Uses parallel workers if `opts.parallel`
+        """
+        tac_template = self.get_tactic_template()
+        file_env_factory = lambda: FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, 
+            with_hammer=with_hammer, hammer_timeout=hammer_timeout)
+
+        loss = None
+        for ep in range(n_epoch):
+            samples = self.sample(epochs_per_update, tac_template, train=True, file_env_factory=file_env_factory, train=True)
+            
+            losses_env = [((-logprob)
+                            * (reward).to(logprob.device)).unsqueeze(0)
+                            for logprob, reward in samples]
+            # Do loss
+            if loss is None:
+                loss = torch.cat(losses_env).mean()
+            else:
+                loss += torch.cat(losses_env).mean()
+            if torch.isnan(loss):
+                print("=======NAN=======")
+                pdb.set_trace()
+            # Update
+            print("\tLoss: {}".format(loss.item()))
+            self.optimizer.zero_grad()
+            loss.backward()
+            print("\tEpoch loss{}: {}".format(ep, loss.item()))
+            self.optimizer.step()
+        
+        return results
+
+
+    def train_RL_DFS(self, n_epoch, with_hammer, hammer_timeout):
+        """
+        TODO: put in `RL_Trainer` sort of file ...?
+        Collects samples & updates the model in accordance with DFS sampling
+        """
         for curr_epoch in range(n_epoch):
             print("\n---EPOCH---")
             print("-----{}-----\n".format(curr_epoch))
@@ -155,25 +199,19 @@ class Agent:
                         samples, Nsa, Ns = self.prove(proof_env, train=True, sample=sample) # TODO: control number of samples better
 
                         losses_env = [((Ns[state]/Nsa[state][action]).to(logprob.device)
+                                      * torch.exp(logprob)
                                       * (-logprob)
-                                      * reward).to(logprob.device)
+                                      * (reward).to(logprob.device)).unsqueeze(0)
                                       for state, action, logprob, reward in samples]
                     elif sample == 'vanilla':
                         samples = self.prove(proof_env, train=True, sample=sample) # TODO: control number of samples
 
                         losses_env = [((-logprob)
-                                      * reward).to(logprob.device).unsqueeze(0)
+                                      * (reward).to(logprob.device)).unsqueeze(0)
                                       for logprob, reward in samples]
                     else:
                         raise ValueError('Sampling method not found.')
 
-                    # If we have all failures, use backup signal
-                    # alpha_backup = 0.05
-                    # expanded = torch.Tensor([t[-2] for t in trajectories]).to(probs.device)
-                    # signal = alpha_backup*(expanded - expanded.mean()) / (1e-8 + expanded.std())
-                    # signal += 2*(wins-0.5)
-                    # print(expanded)
-                    # loss = -torch.multiply(probs, signal).mean()
                     if loss is None:
                         loss = torch.cat(losses_env).mean()
                     else:
@@ -185,15 +223,12 @@ class Agent:
                     if proof_name is not None:
                         break
 
-                    # proof_env.serapi = proof_env.initialize_serapi()
             print("\tLoss: {}".format(loss.item()))
             self.optimizer.zero_grad()
             loss.backward()
-            # pdb.set_trace()
             self.optimizer.step()
 
         self.save(n_epoch, "train-ckpt/")
-        # log('\ntraining losses: %f' % loss.item())
         return results
 
     def valid(self, n_epoch):
@@ -327,24 +362,27 @@ class Agent:
         if 'ours' not in self.opts.method:  # auto, hammer, etc.
             return self.prove_one_tactic(proof_env, self.opts.method)
 
-        m = re.fullmatch(r'ours\+(?P<auto_tac>\w+)', self.opts.method)  # ours+auto/hammer/etc.
-        if m is not None:
-            tac_template = m['auto_tac'] + '; %s.'
-        else:
-            tac_template = '%s.'
-
+        tac_template = self.get_tac_template()
         # pdb.set_trace()
         if train:
             if sample == 'DFS':
                 return self.sample_DFS(proof_env, tac_template, train=True)
-            elif sample == 'vanilla':
-                return self.sample(proof_env, tac_template, train=True)
             else:
                 raise ValueError('Sampling method not found.')
         return self.prove_DFS(proof_env, tac_template)
 
-    def sample(self, proof_env, tac_template, train=False):
-        return self.sample_once(proof_env, tac_template, train)
+    def sample_parallel(self, epochs, file_env_factory, tac_template, train=False):
+        parallel_sampler = ParallelSampler(file_env_factory, tac_template, self, train)        
+        return parallel_sampler.sample_trajectories(epochs)
+    
+    def sample(self, epochs, tac_template, train=False, file_env_factory=None, proof_env=None):
+        if self.opts.parallel_sample:
+            assert file_env_factory is not None
+            return self.sample_parallel(self, epochs, file_env_factory, tac_template, train)
+        if proof_env:
+            assert file_env_factory is None and epochs == 1
+            return self.sample_once(proof_env, tac_template, train)
+        raise NotImplementedError
 
     def sample_once(self, proof_env, tac_template, train=False):
         obs = proof_env.init()
@@ -480,7 +518,7 @@ class Agent:
                 samples = [(obs_string, tac_string, logprob, 1) for obs_string, tac_string, logprob in prob_list]
                 sample_list.extend(samples)
                 prob_list.pop(-1)
-                proof_env.step('Undo.') #TODO: find out whether this step is necessary
+                proof_env.serapi.pop() #TODO: find out if this works
                 continue
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
                 # TODO: reassure that its the total number of tactics over the whole beam search but not along the trajectory.
@@ -651,3 +689,16 @@ class Agent:
     def save(self, n_epoch, dirname):
         torch.save({'state_dict': self.model.state_dict(), 'n_epoch': n_epoch,
                     'optimizer': self.optimizer.state_dict()}, os.path.join(dirname, 'model_%03d.pth' % n_epoch))
+
+    def get_tactic_template(self):
+        """
+        Smiles at you kindly :D
+        come warm up by the fire, weary sojourner, and enjoy the fruits of modularity
+        """
+        m = re.fullmatch(r'ours\+(?P<auto_tac>\w+)', self.opts.method)  # ours+auto/hammer/etc.
+        if m is not None:
+            tac_template = m['auto_tac'] + '; %s.'
+        else:
+            tac_template = '%s.'
+            
+        return tac_template

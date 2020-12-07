@@ -201,7 +201,7 @@ class FileEnv:
         if self.next_proof_idx >= len(self.proofs):  # no more theorem
             raise StopIteration
         
-        pdb.set_trace()
+        # pdb.set_trace()
         next_proof = self.proofs[self.next_proof_idx]
         self.env = update_env(self.env, next_proof['env_delta'])
         # pdb.set_trace()

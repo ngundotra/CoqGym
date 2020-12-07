@@ -163,11 +163,14 @@ class FileEnv:
     def __next__(self):
         if self.next_proof_idx >= len(self.proofs):  # no more theorem
             raise StopIteration
-
+        
+        pdb.set_trace()
         next_proof = self.proofs[self.next_proof_idx]
         self.env = update_env(self.env, next_proof['env_delta'])
         del next_proof['env_delta']
         next_proof['env'] = self.env
+
+        
 
         if self.serapi.dead:
             self.serapi = self.initialize_serapi()

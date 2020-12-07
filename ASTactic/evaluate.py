@@ -25,6 +25,7 @@ if __name__ == '__main__':
     parser.add_argument('--projs_split', type=str, default='../projs_split.json')
     parser.add_argument('--split', choices=['train', 'valid', 'test'], type=str, default='test')
     parser.add_argument('--file', type=str)
+    parser.add_argument('--project', type=str)
     parser.add_argument('--proof', type=str)
     parser.add_argument('--filter', type=str)
     parser.add_argument('--path', type=str)
@@ -71,6 +72,8 @@ if __name__ == '__main__':
 
     if opts.file:
         files = [opts.file]
+    elif opts.project:
+        files = glob(os.path.join(opts.datapath, '%s/**/*.json' % opts.project), recursive=True)
     else:
         files = []
         projs = json.load(open(opts.projs_split))['projs_' + opts.split]
@@ -104,3 +107,4 @@ if __name__ == '__main__':
     del opts['device']
     json.dump({'options': opts, 'results': results}, open(oup_file, 'wt'))
     log('results saved to ' + oup_file)
+

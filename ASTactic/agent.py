@@ -17,6 +17,8 @@ import gc
 from copy import deepcopy
 from time import time
 
+# Custom Sampling Techniques (highly advanced, >9000 IQ)
+from sampler import ParallelSampler
 
 def action_seq_loss(logits_batch, actions_batch, opts):
     assert len(logits_batch) == len(actions_batch)
@@ -120,7 +122,7 @@ class Agent:
             - produce residual reward by # of open & closed goals from each environment (?)
         """
         self.model.train()
-        log('training with DFS')
+        log('training with {}'.format(sample))
 
         if 'hammer' in self.opts.method:
             for atp in ['Vampire', 'Z3', 'CVC4', 'Eprover']:
@@ -138,23 +140,24 @@ class Agent:
         # TODO: train with training `data_batch` instead. Create `proof_env` for each data.
         # {proof_name: [lowest loss, success]}
         if sample == "vanilla":
-            self.train_RL_PG(n_epoch, filename, with_hammer, hammer_timeout)
+            self.train_RL_PG(n_epoch, 15, filename, with_hammer, hammer_timeout)
         elif sample == "DFS":
             return self.train_RL_DFS(n_epochs, with_hammer, hammer_timeout)
     
 
-    def train_RL_PG(self, n_epoch, epochs_per_update, with_hammer, hammer_timeout):
+    def train_RL_PG(self, n_epoch, epochs_per_update, filename, with_hammer, hammer_timeout):
         """
         Collects hella samples for Policy Gradients.
         Uses parallel workers if `opts.parallel`
         """
-        tac_template = self.get_tactic_template()
-        file_env_factory = lambda: FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, 
-            with_hammer=with_hammer, hammer_timeout=hammer_timeout)
+        tac_template = self.get_tac_template()
+        file_env_args = (filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer, hammer_timeout)
+        # file_env_factory = lambda: FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, 
+            # with_hammer=with_hammer, hammer_timeout=hammer_timeout)
 
         loss = None
         for ep in range(n_epoch):
-            samples = self.sample(epochs_per_update, tac_template, train=True, file_env_factory=file_env_factory, train=True)
+            samples = self.sample(epochs_per_update, tac_template, file_env_args=file_env_args, train=True)
             
             losses_env = [((-logprob)
                             * (reward).to(logprob.device)).unsqueeze(0)
@@ -371,16 +374,16 @@ class Agent:
                 raise ValueError('Sampling method not found.')
         return self.prove_DFS(proof_env, tac_template)
 
-    def sample_parallel(self, epochs, file_env_factory, tac_template, train=False):
-        parallel_sampler = ParallelSampler(file_env_factory, tac_template, self, train)        
+    def sample_parallel(self, epochs, file_env_args, tac_template, train=False):
+        parallel_sampler = ParallelSampler(file_env_args, tac_template, self, train)        
         return parallel_sampler.sample_trajectories(epochs)
     
-    def sample(self, epochs, tac_template, train=False, file_env_factory=None, proof_env=None):
+    def sample(self, epochs, tac_template, train=False, file_env_args=None, proof_env=None):
         if self.opts.parallel_sample:
-            assert file_env_factory is not None
-            return self.sample_parallel(self, epochs, file_env_factory, tac_template, train)
+            assert file_env_args is not None
+            return self.sample_parallel(epochs, file_env_args, tac_template, train)
         if proof_env:
-            assert file_env_factory is None and epochs == 1
+            assert file_env_args is None and epochs == 1
             return self.sample_once(proof_env, tac_template, train)
         raise NotImplementedError
 
@@ -690,7 +693,7 @@ class Agent:
         torch.save({'state_dict': self.model.state_dict(), 'n_epoch': n_epoch,
                     'optimizer': self.optimizer.state_dict()}, os.path.join(dirname, 'model_%03d.pth' % n_epoch))
 
-    def get_tactic_template(self):
+    def get_tac_template(self):
         """
         Smiles at you kindly :D
         come warm up by the fire, weary sojourner, and enjoy the fruits of modularity

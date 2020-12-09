@@ -157,24 +157,31 @@ class Agent:
 
         loss = None
         for ep in range(n_epoch):
-            samples = self.sample(epochs_per_update, tac_template, file_env_args=file_env_args, train=True)
+            grads, rewards, collected = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
+
+            for idx, (layer, grad) in enumerate(zip(self.model.parameters(), grads[0])):
+                print("idx:", idx)
+                if idx == 17:
+                    pdb.set_trace()
+                for p, g in zip(layer, grad):
+                    p.grad = g
             
-            losses_env = [((-logprob)
-                            * (reward).to(logprob.device)).unsqueeze(0)
-                            for logprob, reward in samples]
+            # losses_env = [((-logprob)
+            #                 * (reward).to(logprob.device)).unsqueeze(0)
+            #                 for logprob, reward in samples]
             # Do loss
-            if loss is None:
-                loss = torch.cat(losses_env).mean()
-            else:
-                loss += torch.cat(losses_env).mean()
-            if torch.isnan(loss):
-                print("=======NAN=======")
-                pdb.set_trace()
+            # if loss is None:
+            #     loss = torch.cat(losses_env).mean()
+            # else:
+            #     loss += torch.cat(losses_env).mean()
+            # if torch.isnan(loss):
+            #     print("=======NAN=======")
+            #     pdb.set_trace()
             # Update
-            print("\tLoss: {}".format(loss.item()))
-            self.optimizer.zero_grad()
-            loss.backward()
-            print("\tEpoch loss{}: {}".format(ep, loss.item()))
+            # print("\tLoss: {}".format(loss.item()))
+            # self.optimizer.zero_grad()
+            # loss.backward()
+            # print("\tEpoch loss{}: {}".format(ep, loss.item()))
             self.optimizer.step()
         
         return results

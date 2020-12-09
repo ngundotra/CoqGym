@@ -140,7 +140,8 @@ class Agent:
         # TODO: train with training `data_batch` instead. Create `proof_env` for each data.
         # {proof_name: [lowest loss, success]}
         if sample == "vanilla":
-            self.train_RL_PG(n_epoch, 15, filename, with_hammer, hammer_timeout)
+            total_collected = self.train_RL_PG(n_epoch, 15, filename, with_hammer, hammer_timeout)
+            return "Train PG: {} samples used.".format(total_collected)
         elif sample == "DFS":
             return self.train_RL_DFS(n_epochs, with_hammer, hammer_timeout)
     
@@ -152,19 +153,17 @@ class Agent:
         """
         tac_template = self.get_tac_template()
         file_env_args = (filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer, hammer_timeout)
-        # file_env_factory = lambda: FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, 
-            # with_hammer=with_hammer, hammer_timeout=hammer_timeout)
 
         loss = None
+        total_collected = 0 
         for ep in range(n_epoch):
             grads, rewards, collected = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
+            total_collected += collected
 
-            for idx, (layer, grad) in enumerate(zip(self.model.parameters(), grads[0])):
-                print("idx:", idx)
-                if idx == 17:
-                    pdb.set_trace()
-                for p, g in zip(layer, grad):
-                    p.grad = g
+            for idx, (layer, grad) in enumerate(zip(self.model.parameters(), grads)):
+                if grad is not None:
+                    for p, g in zip(layer, grad):
+                        p.grad = g / collected
             
             # losses_env = [((-logprob)
             #                 * (reward).to(logprob.device)).unsqueeze(0)
@@ -184,7 +183,7 @@ class Agent:
             # print("\tEpoch loss{}: {}".format(ep, loss.item()))
             self.optimizer.step()
         
-        return results
+        return total_collected
 
 
     def train_RL_DFS(self, n_epoch, with_hammer, hammer_timeout):
@@ -427,7 +426,7 @@ class Agent:
 
             if obs['result'] == 'SUCCESS':
                 script.append(tac)
-                samples = [(logprob, 1) for logprob in prob_list]
+                samples = [(logprob, 1.0) for logprob in prob_list]
                 return samples
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
                 samples = [(logprob, -0.1) for logprob in prob_list] #TODO: set reward to 0 or -0.1?

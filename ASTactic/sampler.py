@@ -6,7 +6,7 @@ try:
     set_sharing_strategy("file_descriptor")
 except RuntimeError:
     pass
-import os
+import os, pdb
 from eval_env import FileEnv
 from utils import log
 
@@ -48,7 +48,7 @@ class ParallelSampler:
             res = queue.get()
             if res is None:
                 ended_workers += 1
-                log("-----------COLLECTED {} TRAJECTORIES-------------".format(ended_workers))
+                log("------------COLLECTED {} SAMPLES-------------".format(ended_workers))
             else:
                 async_grads = res['grads']
                 async_rewards = res['rewards']
@@ -57,27 +57,18 @@ class ParallelSampler:
                 # print("-----COLLECTED: {}".format(async_rewards))
 
                 # Process rewards
-                rewards.append(async_rewards.clone())
+                rewards.extend(async_rewards)
                 del async_rewards
 
                 # Process gradients (sum them)
-                if grads is None:
-                    # grads = [[x.clone() if x is not None else None for x in layer] for layer in async_grads]
-                    grads = [[x.clone() for x in layer] for layer in async_grads]
-                    grads = async_grads
-                else:
-                    grads = [
-                                # [g1+g2.clone() if g1 is not None else None for g1, g2 in zip(layer, async_layer)] 
-                                [g1+g2.clone() for g1, g2 in zip(layer, async_layer)] 
-                                for layer, async_layer in zip(grads, async_grads)
-                    ]
+                grads = ParallelSampler._join_grads(grads, async_grads, clone=True)
                 del async_grads
-                collected += 1
+                collected += async_collected
 
         log("------------------FINISHED ASYNC-------------------")
         done.set()
         print("->\tDone!")
-        assert collected == len(rewards), "# collected != # rewards"
+        assert collected == len(rewards), "{} collected != {} rewards".format(collected, len(rewards))
         return grads, rewards, collected
 
     def async_trajectories(self, *args):
@@ -90,29 +81,50 @@ class ParallelSampler:
         """
         pid, queue, done = args[0], args[1], args[2]
         print("{}: started collection".format(pid))
-        try:
-            with FileEnv(*self.file_env_args) as fenv:
-                for proof_env in fenv:
-                    try:
-                        trajectories = self.agent.sample_once(proof_env, self.tac_template, train=True)
-                        prob_grads = []
-                        rewards = []
-                        collected = 0
-                        for prob, r in trajectories:
-                            self.agent.optimizer.zero_grad()
-                            prob.backward(retain_graph=True)
-                            # grads = [p.grad * r if p.grad is not None else None for p in self.agent.model.parameters()]
-                            grads = [p.grad * r for p in self.agent.model.parameters()]
-                            prob_grads.append(grads)
-                            rewards.append(r)
-                            collected += 1
-                        rewards = torch.Tensor(rewards)
-                        print("{}: rewards-{}".format(pid, len(rewards)))
-                        queue.put({'grads': prob_grads, 'rewards': rewards, 'collected': collected})
-                    except Exception:
-                        continue
-        except Exception:
-            pass
+        # try:
+        with FileEnv(*self.file_env_args) as fenv:
+            for proof_env in fenv:
+                    # try:
+                trajectories = self.agent.sample_once(proof_env, self.tac_template, train=True)
+                prob_grads = None
+                rewards = []
+                collected = 0
+                for prob, r in trajectories:
+                    self.agent.optimizer.zero_grad()
+                    prob.backward(retain_graph=True)
+                    grads = [p.grad * r if p.grad is not None else None for p in self.agent.model.parameters()]
+
+                    prob_grads = ParallelSampler._join_grads(prob_grads, grads)
+
+                    rewards.append(r)
+                    collected += 1
+                print("{}: rewards-{}".format(pid, len(rewards)))
+                queue.put({'grads': prob_grads, 'rewards': rewards, 'collected': collected})
+                    # except Exception as e:
+                    #     print(e)
+                    #     continue
+        # except Exception:
+        #     pass
         queue.put(None)
         print("{}: finished & waiting".format(pid))
         done.wait()
+
+    @staticmethod
+    def _join_grads(old, new, clone=False):
+        """
+        Joins two gradients by adding
+        """
+        if old is None:
+            old = new
+        else:
+            assert len(old) == len(new), "got-{} | expected-{}".format(len(old), len(new))
+            for i, grad in enumerate(new):
+                if clone and grad is not None:
+                    grad = grad.clone()
+
+                if old[i] is not None and grad is not None:
+                    old[i] += grad
+                elif grad is not None:
+                    old[i] = grad
+        return old
+        

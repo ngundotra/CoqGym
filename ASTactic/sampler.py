@@ -1,4 +1,3 @@
-import torch
 import torch.multiprocessing as mp
 from torch.multiprocessing import set_sharing_strategy, set_start_method
 try:
@@ -6,6 +5,7 @@ try:
     set_sharing_strategy("file_descriptor")
 except RuntimeError:
     pass
+import torch
 import os, pdb
 from eval_env import FileEnv
 from utils import log
@@ -32,10 +32,9 @@ class ParallelSampler:
         """
         done.clear()
         queue = mp.Queue()
-        # self.pool.submit
         log("------------------STARTING ASYNC-------------------")
         producers = []
-        for i in range(ParallelSampler.NUM_WORKERS):
+        for i in range(n_epochs):
             proc = mp.Process(target=self.async_trajectories, args=(i,queue,done))
             proc.start()
             producers.append(proc)
@@ -48,13 +47,11 @@ class ParallelSampler:
             res = queue.get()
             if res is None:
                 ended_workers += 1
-                log("------------COLLECTED {} SAMPLES-------------".format(ended_workers))
+                log("------------COLLECTED {} SAMPLES-------------".format(collected))
             else:
                 async_grads = res['grads']
                 async_rewards = res['rewards']
                 async_collected = res['collected']
-                # print("-----COLLECTED: {}".format(async_grads))
-                # print("-----COLLECTED: {}".format(async_rewards))
 
                 # Process rewards
                 rewards.extend(async_rewards)
@@ -126,5 +123,4 @@ class ParallelSampler:
                     old[i] += grad
                 elif grad is not None:
                     old[i] = grad
-        return old
-        
+        return old        

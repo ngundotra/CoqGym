@@ -140,7 +140,7 @@ class Agent:
         # TODO: train with training `data_batch` instead. Create `proof_env` for each data.
         # {proof_name: [lowest loss, success]}
         if sample == "vanilla":
-            total_collected = self.train_RL_PG(n_epoch, 15, filename, with_hammer, hammer_timeout)
+            total_collected = self.train_RL_PG(n_epoch, 5, filename, with_hammer, hammer_timeout)
             return "Train PG: {} samples used.".format(total_collected)
         elif sample == "DFS":
             return self.train_RL_DFS(n_epochs, with_hammer, hammer_timeout)

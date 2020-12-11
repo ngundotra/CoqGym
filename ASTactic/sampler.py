@@ -60,7 +60,7 @@ class ParallelSampler:
         done.set()
         for proc in producers:
             proc.join()
-        # del queue
+        del queue
         print("->\tDone!")
         log("------------------FINISHED ASYNC-------------------")
         # assert collected == len(rewards), "{} collected != {} rewards".format(collected, len(rewards))

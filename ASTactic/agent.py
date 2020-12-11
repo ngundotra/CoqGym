@@ -182,6 +182,7 @@ class Agent:
             # loss.backward()
             # print("\tEpoch loss{}: {}".format(ep, loss.item()))
             self.optimizer.step()
+        self.save(n_epoch, "train-PG-ckpt/")
         
         return total_collected
 

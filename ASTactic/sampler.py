@@ -42,6 +42,7 @@ class ParallelSampler:
         ended_workers = 0
         grads = None
         collected = 0
+        results = []
         while ended_workers != n_epochs:
             res = queue.get()
             if res is None:
@@ -49,13 +50,14 @@ class ParallelSampler:
                 log("------------COLLECTED {} SAMPLES-------------".format(collected))
             else:
                 async_grads = res['grads']
-                # async_rewards = res['rewards']
+                async_results = res['results']
                 async_collected = res['collected']
 
                 # Process gradients (sum them)
                 grads = ParallelSampler._join_grads(grads, async_grads, clone=True)
                 del async_grads
                 collected += async_collected
+                results += async_results
 
         done.set()
         for proc in producers:
@@ -64,7 +66,7 @@ class ParallelSampler:
         print("->\tDone!")
         log("------------------FINISHED ASYNC-------------------")
         # assert collected == len(rewards), "{} collected != {} rewards".format(collected, len(rewards))
-        return grads, collected
+        return results, grads, collected
 
     def async_trajectories(self, *args):
         """
@@ -82,16 +84,17 @@ class ParallelSampler:
                 rewards = []
                 for proof_env in fenv:
                     self.agent.optimizer.zero_grad()
-                    trajectory = self.agent.sample_once(proof_env, self.tac_template, train=True)
+                    data = self.agent.sample_once(proof_env, self.tac_template, train=True)
+                    trajectory, results = data['samples'], data['results']
                     collected = len(trajectory)
 
-                    losses = torch.cat([(prob * r).unsqueeze(0) for prob, r in trajectory]).to(trajectory[0][0].device)
+                    losses = torch.cat([(prob * -r).unsqueeze(0) for prob, r in trajectory]).to(trajectory[0][0].device)
                     loss = torch.mean(losses)
                     loss.backward()
                     grads = [p.grad if p.grad is not None else None for p in self.agent.model.parameters()]
                     # prob_grads = ParallelSampler._join_grads(prob_grads, grads)
                     print("{}: collected {}".format(pid, collected))
-                    queue.put({'grads': grads, 'collected': collected})
+                    queue.put({'grads': grads, 'collected': collected, 'results': results})
         except Exception as e:
             print("{}: ERROR-{}".format(pid,e))
         queue.put(None)
@@ -119,14 +122,3 @@ class ParallelSampler:
                 elif grad is not None:
                     old[i] = grad
         return old        
-
-
-# class CoqAgent(torch.multiprocessing.Process):
-#     def __init__(self, pid, ...):
-#         super(CoqAgent, self).__init__()
-#         self.pid = pid
-
-#     def run(self):
-#         pass
-
-#     def 

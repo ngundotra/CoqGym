@@ -140,11 +140,10 @@ class Agent:
         # TODO: train with training `data_batch` instead. Create `proof_env` for each data.
         # {proof_name: [lowest loss, success]}
         if sample == "vanilla":
-            total_collected = self.train_RL_PG(n_epoch, 5, filename, with_hammer, hammer_timeout)
-            return "Train PG: {} samples used.".format(total_collected)
+            results, total_collected = self.train_RL_PG(n_epoch, 5, filename, with_hammer, hammer_timeout)
+            return results + [total_collected]
         elif sample == "DFS":
             return self.train_RL_DFS(n_epochs, with_hammer, hammer_timeout)
-    
 
     def train_RL_PG(self, n_epoch, epochs_per_update, filename, with_hammer, hammer_timeout):
         """
@@ -156,8 +155,11 @@ class Agent:
 
         loss = None
         total_collected = 0 
+        all_results = []
         for ep in range(n_epoch):
-            grads, collected = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
+            print("\n>>>>>>>>>>>>>>>>>EPOCH: {}<<<<<<<<<<<<<<<<<<<\n".format(ep))
+            results, grads, collected = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
+            all_results += results
             total_collected += collected
 
             for idx, (layer, grad) in enumerate(zip(self.model.parameters(), grads)):
@@ -184,8 +186,7 @@ class Agent:
             self.optimizer.step()
         self.save(n_epoch, "train-PG-ckpt/")
         
-        return total_collected
-
+        return results, total_collected
 
     def train_RL_DFS(self, n_epoch, with_hammer, hammer_timeout):
         """
@@ -427,11 +428,15 @@ class Agent:
 
             if obs['result'] == 'SUCCESS':
                 script.append(tac)
+                time = self.opts.timeout - obs['time_left']
+                num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
                 samples = [(logprob, 1.0) for logprob in prob_list]
-                return samples
+                return {'samples': samples, 'results': (True, script, time, num_tactics)}
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
+                time = self.opts.timeout - obs['time_left']
+                num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
                 samples = [(logprob, -0.1) for logprob in prob_list] #TODO: set reward to 0 or -0.1?
-                return samples
+                return {'samples': samples, 'results': (False, script, time, num_tactics)}
             elif obs['result'] in ['ERROR']:  # Tactic is misapplied, nothing happened
                 # samples = [(logprob, -0.1) for logprob in prob_list]
                 # return samples
@@ -567,7 +572,7 @@ class Agent:
         tactics = self.model.beam_search(env, local_context, goal)
         stack = [[tac_template % tac.to_tokens() for tac in tactics[::-1]]]
         script = []
-        pdb.set_trace()
+        # pdb.set_trace()
 
         # depth-first search starting from the trace
         while stack != [[]]:

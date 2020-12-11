@@ -157,7 +157,7 @@ class Agent:
         loss = None
         total_collected = 0 
         for ep in range(n_epoch):
-            grads, rewards, collected = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
+            grads, collected = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
             total_collected += collected
 
             for idx, (layer, grad) in enumerate(zip(self.model.parameters(), grads)):

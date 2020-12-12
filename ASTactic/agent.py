@@ -444,8 +444,10 @@ class Agent:
                 first_goal_signatures.add(sig)
 
                 if len(script) >= self.opts.depth_limit:
+                    time = self.opts.timeout - obs['time_left']
+                    num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
                     samples = [(logprob, -0.1) for logprob in prob_list]  #TODO: set reward to 0 or -0.1?
-                    return samples
+                    return {'samples': samples, 'results': (False, script, time, num_tactics)}
 
                 local_context, goal = parse_goal(obs['fg_goals'][0])
                 tactics = self.model.beam_search(env, local_context, goal, train)

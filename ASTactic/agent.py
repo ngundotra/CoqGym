@@ -113,7 +113,7 @@ class Agent:
 
         log('\ntraining losses: %f' % loss)
 
-    def train_RL(self, n_epoch, filename, proof_name=None, sample='DFS'):
+    def train_RL(self, n_epoch, filename, logger, proof_name=None, sample='DFS'):
         """
         TODO:
             - reset the env
@@ -121,6 +121,7 @@ class Agent:
             - 150 trajectories per update (?)
             - produce residual reward by # of open & closed goals from each environment (?)
         """
+        self.logger = logger
         self.model.train()
         log('training with {}'.format(sample))
 
@@ -144,8 +145,10 @@ class Agent:
             return results + [total_collected]
         elif sample == "DFS":
             return self.train_RL_DFS(n_epochs, with_hammer, hammer_timeout)
+        else:
+            raise ValueError('Sampling method not found.')
 
-    def train_RL_PG(self, n_epoch, epochs_per_update, filename, with_hammer, hammer_timeout):
+    def train_RL_PG(self, n_epoch, epochs_per_update, filename, with_hammer, hammer_timeout, use_dfs=False):
         """
         Collects hella samples for Policy Gradients.
         Uses parallel workers if `opts.parallel`
@@ -156,11 +159,14 @@ class Agent:
         loss = None
         total_collected = 0 
         all_results = []
+        loss_graph = []
         for ep in range(n_epoch):
-            print("\n>>>>>>>>>>>>>>>>>EPOCH: {}<<<<<<<<<<<<<<<<<<<\n".format(ep))
-            results, grads, collected = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
+            print("\n>>>>>>>>>>>>>>>>>>>>EPOCH: {}<<<<<<<<<<<<<<<<<<<<<<\n".format(ep))
+            results, grads, collected, losses = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
             all_results += results
             total_collected += collected
+            
+            avg_loss = sum(losses)/len(losses)
 
             for idx, (layer, grad) in enumerate(zip(self.model.parameters(), grads)):
                 if grad is not None:
@@ -182,7 +188,8 @@ class Agent:
             # print("\tLoss: {}".format(loss.item()))
             # self.optimizer.zero_grad()
             # loss.backward()
-            # print("\tEpoch loss{}: {}".format(ep, loss.item()))
+            print("\tEpoch loss{}: {}".format(ep, avg_loss))
+            loss_graph.append(avg_loss)
             self.optimizer.step()
         self.save(n_epoch, "train-PG-ckpt/")
         
@@ -206,22 +213,13 @@ class Agent:
                         continue
                     print('proof: ', proof_env.proof['name'])
                     # success, proof_pred, time, num_tactics, trajectory = self.prove(proof_env, train=True)
-                    if sample == 'DFS':
-                        samples, Nsa, Ns = self.prove(proof_env, train=True, sample=sample) # TODO: control number of samples better
+                    samples, Nsa, Ns = self.prove(proof_env, train=True, sample=sample) # TODO: control number of samples better
 
-                        losses_env = [((Ns[state]/Nsa[state][action]).to(logprob.device)
-                                      * torch.exp(logprob)
-                                      * (-logprob)
-                                      * (reward).to(logprob.device)).unsqueeze(0)
-                                      for state, action, logprob, reward in samples]
-                    elif sample == 'vanilla':
-                        samples = self.prove(proof_env, train=True, sample=sample) # TODO: control number of samples
-
-                        losses_env = [((-logprob)
-                                      * (reward).to(logprob.device)).unsqueeze(0)
-                                      for logprob, reward in samples]
-                    else:
-                        raise ValueError('Sampling method not found.')
+                    losses_env = [((Ns[state]/Nsa[state][action]).to(logprob.device)
+                                    * torch.exp(logprob)
+                                    * (-logprob)
+                                    * (reward).to(logprob.device)).unsqueeze(0)
+                                    for state, action, logprob, reward in samples]
 
                     if loss is None:
                         loss = torch.cat(losses_env).mean()
@@ -507,8 +505,12 @@ class Agent:
             else:
                 tac, logprob = stack[-1].pop()
 
-            obs_string = None #TODO: a string identifier for the current obs
-            tac_string = None #TODO: a string identifier for the current tac
+            # -----Exploration-----
+            # obs_string = None #TODO: a string identifier for the current obs
+            # tac_string = None #TODO: a string identifier for the current tac
+            # f - f_hat
+            # f is input -> embedding
+            # maximize(f-f_hat)
 
             # Nsa
             if obs_string not in Nsa.keys():

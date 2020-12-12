@@ -28,7 +28,7 @@ class ParallelSampler:
 
     def sample_trajectories(self, n_epochs=1, **kwargs):
         """
-        Uses a pool to collect trajectories
+        Uses 3-5 processes to collect trajectories.
         """
         done.clear()
         queue = mp.Queue()
@@ -43,6 +43,7 @@ class ParallelSampler:
         grads = None
         collected = 0
         results = []
+        losses = []
         while ended_workers != n_epochs:
             res = queue.get()
             if res is None:
@@ -52,12 +53,79 @@ class ParallelSampler:
                 async_grads = res['grads']
                 async_results = res['results']
                 async_collected = res['collected']
+                async_loss = res['loss']
 
                 # Process gradients (sum them)
                 grads = ParallelSampler._join_grads(grads, async_grads, clone=True)
                 del async_grads
                 collected += async_collected
                 results += async_results
+                losses.append(async_loss)
+
+        done.set()
+        for proc in producers:
+            proc.join()
+        del queue
+        print("->\tDone!")
+        log("------------------FINISHED ASYNC-------------------")
+        # assert collected == len(rewards), "{} collected != {} rewards".format(collected, len(rewards))
+        return results, grads, collected, losses
+
+    def sample_dfs_trajectories(self, n_epochs=1, **kwargs):
+        """
+        Uses a pool to collect trajectories
+
+        Problems:
+        - Need many rollouts of same proof environment
+        - Would like to document number of times each node is visited
+        
+        file-env: [proof1, proof2, proof3]
+        Process 1 [1st 33% environments]
+        for i, p_env in enumerate(fenv):
+            if i % 3 == 0:
+                s = sample_dfs()
+        Process 2 [2nd 33%]
+        for i, p_env in enumerate(fenv):
+            if i % 3 == 1:
+                s = sample_dfs()
+        Process 3 [3rd 33%]
+        for i, p_env in enumerate(fenv):
+            if i % 3 == 2:
+                s = sample_dfs()
+
+        return self._join_counts(Nsa1, Nsa2, Nsa3)
+        """
+        done.clear()
+        queue = mp.Queue()
+        log("------------------STARTING ASYNC-------------------")
+        producers = []
+        for i in range(n_epochs):
+            proc = mp.Process(target=self.async_trajectories, args=(i,queue,done))
+            proc.start()
+            producers.append(proc)
+            
+        ended_workers = 0
+        grads = None
+        collected = 0
+        results = []
+        losses = []
+        while ended_workers != n_epochs:
+            res = queue.get()
+            if res is None:
+                ended_workers += 1
+                log("------------COLLECTED {} SAMPLES-------------".format(collected))
+            else:
+                async_grads = res['grads']
+                async_results = res['results']
+                async_collected = res['collected']
+                async_loss = res['loss']
+
+                # Process gradients (sum them)
+                grads = ParallelSampler._join_grads(grads, async_grads, clone=True)
+                del async_grads
+                collected += async_collected
+                results += async_results
+                losses.append(async_loss)
 
         done.set()
         for proc in producers:
@@ -81,20 +149,25 @@ class ParallelSampler:
         try:
             with FileEnv(*self.file_env_args) as fenv:
                 prob_grads = None
-                rewards = []
                 for proof_env in fenv:
                     self.agent.optimizer.zero_grad()
+                    # Collect data we can backprop
                     data = self.agent.sample_once(proof_env, self.tac_template, train=True)
                     trajectory, results = data['samples'], data['results']
                     collected = len(trajectory)
 
+                    # Backpropagate loss
                     losses = torch.cat([(prob * -r).unsqueeze(0) for prob, r in trajectory]).to(trajectory[0][0].device)
                     loss = torch.mean(losses)
-                    loss.backward()
+                    loss.backward() # loss.backward(retain_graph=True) is VERY expensive
                     grads = [p.grad if p.grad is not None else None for p in self.agent.model.parameters()]
-                    # prob_grads = ParallelSampler._join_grads(prob_grads, grads)
+
                     print("{}: collected {}".format(pid, collected))
-                    queue.put({'grads': grads, 'collected': collected, 'results': results})
+                    print("{}: results {}".format(pid, results))
+                    queue.put({'grads': grads, 
+                    'collected': collected, 
+                    'results': results,
+                    'loss': loss.detach().item()})
         except Exception as e:
             print("{}: ERROR-{}".format(pid,e))
         queue.put(None)

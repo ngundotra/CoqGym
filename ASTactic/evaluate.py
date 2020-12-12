@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys, os
+import tensorboard_logger as tb_logger
 sys.setrecursionlimit(100000)
 sys.path.append(os.path.normpath(os.path.dirname(os.path.realpath(__file__))))
 sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), '../')))
@@ -29,6 +30,7 @@ if __name__ == '__main__':
     parser.add_argument('--folder', type=str)
     parser.add_argument('--coagulate', action='store_true')
     parser.add_argument('--train_rl', action='store_true')
+    parser.add_argument('--log_dir', type=str, default="")
     parser.add_argument('--parallel_sample', action='store_true')
     parser.add_argument('--sample', choices=['vanilla', 'DFS'], type=str, default='DFS')
     parser.add_argument('--epochs', type=int, default=1)
@@ -113,7 +115,8 @@ if __name__ == '__main__':
             intermed = agent.gloop_evaluate(f, opts.proof)
             results.extend(intermed)
         elif opts.train_rl:
-            results.extend(agent.train_RL(opts.epochs, f, opts.proof, opts.sample))
+            logger = tb_logger.Logger(logdir=opts.log_dir, flush_secs=2)
+            results.extend(agent.train_RL(opts.epochs, f, logger, opts.proof, opts.sample))
         else:
             results.extend(agent.evaluate(f, opts.proof))
         bar.update(i)

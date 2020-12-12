@@ -113,7 +113,7 @@ class Agent:
 
         log('\ntraining losses: %f' % loss)
 
-    def train_RL(self, n_epoch, filename, logger, proof_name=None, sample='DFS'):
+    def train_RL(self, n_epoch, file_list, logger, proof_name=None, sample='DFS'):
         """
         TODO:
             - reset the env
@@ -141,20 +141,21 @@ class Agent:
         # TODO: train with training `data_batch` instead. Create `proof_env` for each data.
         # {proof_name: [lowest loss, success]}
         if sample == "vanilla":
-            results, total_collected = self.train_RL_PG(n_epoch, 5, filename, logger, with_hammer, hammer_timeout)
+            results, total_collected = self.train_RL_PG(n_epoch, 5, file_list, logger, with_hammer, hammer_timeout)
             return results + [total_collected]
         elif sample == "DFS":
             return self.train_RL_DFS(n_epochs, with_hammer, hammer_timeout)
         else:
             raise ValueError('Sampling method not found.')
 
-    def train_RL_PG(self, n_epoch, epochs_per_update, filename, logger, with_hammer, hammer_timeout, use_dfs=False):
+    def train_RL_PG(self, n_epoch, epochs_per_update, file_list, logger, with_hammer, hammer_timeout, use_dfs=False):
         """
         Collects hella samples for Policy Gradients.
         Uses parallel workers if `opts.parallel`
         """
         tac_template = self.get_tac_template()
-        file_env_args = (filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer, hammer_timeout)
+        file_env_args = [(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer, hammer_timeout)
+                for filename in file_list]
 
         loss = None
         total_collected = 0 

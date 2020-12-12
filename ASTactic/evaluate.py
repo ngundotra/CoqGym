@@ -107,22 +107,26 @@ if __name__ == '__main__':
 
     print(files)
     results = []
-    bar = ProgressBar(max_value=len(files))
-    for i, f in enumerate(files):
-        print('file: ', f)
-        #print('cuda memory allocated before file: ', torch.cuda.memory_allocated(opts.device), file=sys.stderr)
-        if opts.coagulate:
-            intermed = agent.gloop_evaluate(f, opts.proof)
-            results.extend(intermed)
-        elif opts.train_rl:
-            assert len(opts.log_dir) > 1, "Require log_dir with train_rl flag on"
-            model_name = os.path.basename(os.path.normpath(opts.path)).strip('.pth')
-            true_logdir = "{}/epochs-{}-path-{}".format(opts.log_dir, opts.epochs, model_name)
-            logger = tb_logger.Logger(logdir=true_logdir, flush_secs=2)
-            results.extend(agent.train_RL(opts.epochs, f, logger, opts.proof, opts.sample))
-        else:
-            results.extend(agent.evaluate(f, opts.proof))
-        bar.update(i)
+    if opts.train_rl:
+        assert len(opts.log_dir) > 1, "Require log_dir with train_rl flag on"
+        model_name = os.path.basename(os.path.normpath(opts.path)).strip('.pth')
+        true_logdir = "{}/epochs-{}-path-{}".format(opts.log_dir, opts.epochs, model_name)
+        if opts.folder:
+            true_logdir += "-folder-{}".format(opts.folder)
+        logger = tb_logger.Logger(logdir=true_logdir, flush_secs=2)
+        results = agent.train_RL(opts.epochs, files, logger, opts.proof, opts.sample)
+    else:
+        results = []
+        bar = ProgressBar(max_value=len(files))
+        for i, f in enumerate(files):
+            print('file: ', f)
+            #print('cuda memory allocated before file: ', torch.cuda.memory_allocated(opts.device), file=sys.stderr)
+            if opts.coagulate:
+                intermed = agent.gloop_evaluate(f, opts.proof)
+                results.extend(intermed)
+            else:
+                results.extend(agent.evaluate(f, opts.proof))
+            bar.update(i)
 
     oup_dir = os.path.join(opts.output_dir, opts.eval_id)
     if not os.path.exists(oup_dir):

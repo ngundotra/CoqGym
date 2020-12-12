@@ -147,27 +147,28 @@ class ParallelSampler:
         pid, queue, done = args[0], args[1], args[2]
         print("{}: started collection".format(pid))
         try:
-            with FileEnv(*self.file_env_args) as fenv:
-                prob_grads = None
-                for proof_env in fenv:
-                    self.agent.optimizer.zero_grad()
-                    # Collect data we can backprop
-                    data = self.agent.sample_once(proof_env, self.tac_template, train=True)
-                    trajectory, results = data['samples'], data['results']
-                    collected = len(trajectory)
+            for fenvargs in self.file_env_args:
+                with FileEnv(*fenvargs) as fenv:
+                    prob_grads = None
+                    for proof_env in fenv:
+                        self.agent.optimizer.zero_grad()
+                        # Collect data we can backprop
+                        data = self.agent.sample_once(proof_env, self.tac_template, train=True)
+                        trajectory, results = data['samples'], data['results']
+                        collected = len(trajectory)
 
-                    # Backpropagate loss
-                    losses = torch.cat([(prob * -r).unsqueeze(0) for prob, r in trajectory]).to(trajectory[0][0].device)
-                    loss = torch.mean(losses)
-                    loss.backward() # loss.backward(retain_graph=True) is VERY expensive
-                    grads = [p.grad if p.grad is not None else None for p in self.agent.model.parameters()]
+                        # Backpropagate loss
+                        losses = torch.cat([(prob * -r).unsqueeze(0) for prob, r in trajectory]).to(trajectory[0][0].device)
+                        loss = torch.mean(losses)
+                        loss.backward() # loss.backward(retain_graph=True) is VERY expensive
+                        grads = [p.grad if p.grad is not None else None for p in self.agent.model.parameters()]
 
-                    print("{}: collected {}".format(pid, collected))
-                    print("{}: results {}".format(pid, results))
-                    queue.put({'grads': grads, 
-                    'collected': collected, 
-                    'results': results,
-                    'loss': loss.detach().item()})
+                        print("{}: collected {}".format(pid, collected))
+                        print("{}: results {}".format(pid, results))
+                        queue.put({'grads': grads, 
+                        'collected': collected, 
+                        'results': results,
+                        'loss': loss.detach().item()})
         except Exception as e:
             print("{}: ERROR-{}".format(pid,e))
         queue.put(None)

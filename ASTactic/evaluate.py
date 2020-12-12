@@ -115,7 +115,10 @@ if __name__ == '__main__':
             intermed = agent.gloop_evaluate(f, opts.proof)
             results.extend(intermed)
         elif opts.train_rl:
-            logger = tb_logger.Logger(logdir=opts.log_dir, flush_secs=2)
+            assert len(opts.log_dir) > 1, "Require log_dir with train_rl flag on"
+            model_name = os.path.basename(os.path.normpath(opts.path)).strip('.pth')
+            true_logdir = "{}/epochs-{}-path-{}".format(opts.log_dir, opts.epochs, model_name)
+            logger = tb_logger.Logger(logdir=true_logdir, flush_secs=2)
             results.extend(agent.train_RL(opts.epochs, f, logger, opts.proof, opts.sample))
         else:
             results.extend(agent.evaluate(f, opts.proof))

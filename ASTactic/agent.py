@@ -121,7 +121,7 @@ class Agent:
             - 150 trajectories per update (?)
             - produce residual reward by # of open & closed goals from each environment (?)
         """
-        self.logger = logger
+        
         self.model.train()
         log('training with {}'.format(sample))
 
@@ -141,14 +141,14 @@ class Agent:
         # TODO: train with training `data_batch` instead. Create `proof_env` for each data.
         # {proof_name: [lowest loss, success]}
         if sample == "vanilla":
-            results, total_collected = self.train_RL_PG(n_epoch, 5, filename, with_hammer, hammer_timeout)
+            results, total_collected = self.train_RL_PG(n_epoch, 5, filename, logger, with_hammer, hammer_timeout)
             return results + [total_collected]
         elif sample == "DFS":
             return self.train_RL_DFS(n_epochs, with_hammer, hammer_timeout)
         else:
             raise ValueError('Sampling method not found.')
 
-    def train_RL_PG(self, n_epoch, epochs_per_update, filename, with_hammer, hammer_timeout, use_dfs=False):
+    def train_RL_PG(self, n_epoch, epochs_per_update, filename, logger, with_hammer, hammer_timeout, use_dfs=False):
         """
         Collects hella samples for Policy Gradients.
         Uses parallel workers if `opts.parallel`
@@ -189,6 +189,7 @@ class Agent:
             # self.optimizer.zero_grad()
             # loss.backward()
             print("\tEpoch loss{}: {}".format(ep, avg_loss))
+            logger.log_value('loss', avg_loss, ep)
             loss_graph.append(avg_loss)
             self.optimizer.step()
         self.save(n_epoch, "train-PG-ckpt/")

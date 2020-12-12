@@ -141,7 +141,7 @@ class Agent:
         # TODO: train with training `data_batch` instead. Create `proof_env` for each data.
         # {proof_name: [lowest loss, success]}
         if sample == "vanilla":
-            results, total_collected = self.train_RL_PG(n_epoch, 5, file_list, logger, with_hammer, hammer_timeout)
+            results, total_collected = self.train_RL_PG(n_epoch, 4, file_list, logger, with_hammer, hammer_timeout)
             return results + [total_collected]
         elif sample == "DFS":
             return self.train_RL_DFS(n_epochs, with_hammer, hammer_timeout)
@@ -161,40 +161,32 @@ class Agent:
         total_collected = 0 
         all_results = []
         loss_graph = []
-        for ep in range(n_epoch):
-            print("\n>>>>>>>>>>>>>>>>>>>>EPOCH: {}<<<<<<<<<<<<<<<<<<<<<<\n".format(ep))
-            results, grads, collected, losses = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
-            all_results += results
-            total_collected += collected
-            
-            avg_loss = sum(losses)/len(losses)
+        last_ep = 0
+        try:
+            for ep in range(n_epoch):
+                last_ep = ep
+                print("\n>>>>>>>>>>>>>>>>>>>>EPOCH: {}<<<<<<<<<<<<<<<<<<<<<<\n".format(ep))
+                results, grads, collected, losses = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
+                all_results += results
+                total_collected += collected
+                
+                avg_loss = sum(losses)/len(losses)
 
-            for idx, (layer, grad) in enumerate(zip(self.model.parameters(), grads)):
-                if grad is not None:
-                    for p, g in zip(layer, grad):
-                        p.grad = g / collected
-            
-            # losses_env = [((-logprob)
-            #                 * (reward).to(logprob.device)).unsqueeze(0)
-            #                 for logprob, reward in samples]
-            # Do loss
-            # if loss is None:
-            #     loss = torch.cat(losses_env).mean()
-            # else:
-            #     loss += torch.cat(losses_env).mean()
-            # if torch.isnan(loss):
-            #     print("=======NAN=======")
-            #     pdb.set_trace()
-            # Update
-            # print("\tLoss: {}".format(loss.item()))
-            # self.optimizer.zero_grad()
-            # loss.backward()
-            print("\tEpoch loss{}: {}".format(ep, avg_loss))
-            logger.log_value('loss', avg_loss, ep)
-            loss_graph.append(avg_loss)
-            self.optimizer.step()
-        self.save(n_epoch, "train-PG-ckpt/")
-        
+                for idx, (layer, grad) in enumerate(zip(self.model.parameters(), grads)):
+                    if grad is not None:
+                        for p, g in zip(layer, grad):
+                            p.grad = g / collected
+                
+                print("\tEpoch loss{}: {}".format(ep, avg_loss))
+                logger.log_value('loss', avg_loss, ep)
+                loss_graph.append(avg_loss)
+                self.optimizer.step()
+        except KeyboardInterrupt as kb:
+            print("Ended on epoch: {}".format(last_ep))
+
+        save_folder= "train-PG-ckpt/{}/".format(self.descriptor)
+        os.makedirs(save_folder, exist_ok=True)
+        self.save(last_ep+1, save_folder)
         return results, total_collected
 
     def train_RL_DFS(self, n_epoch, with_hammer, hammer_timeout):

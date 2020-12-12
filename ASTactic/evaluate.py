@@ -113,6 +113,9 @@ if __name__ == '__main__':
         true_logdir = "{}/epochs-{}-path-{}".format(opts.log_dir, opts.epochs, model_name)
         if opts.folder:
             true_logdir += "-folder-{}".format(opts.folder)
+            agent.descriptor = opts.folder
+        elif opts.file:
+            agent.descriptor = opts.file
         logger = tb_logger.Logger(logdir=true_logdir, flush_secs=2)
         results = agent.train_RL(opts.epochs, files, logger, opts.proof, opts.sample)
     else:

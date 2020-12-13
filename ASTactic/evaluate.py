@@ -15,6 +15,7 @@ from utils import log
 from progressbar import ProgressBar
 from agent import Agent
 from models.prover import Prover
+import time
 import pdb
 
 
@@ -116,6 +117,7 @@ if __name__ == '__main__':
             agent.descriptor = opts.folder
         elif opts.file:
             agent.descriptor = opts.file
+        true_logdir += time.strftime("/%X_%d-%m-%y")
         logger = tb_logger.Logger(logdir=true_logdir, flush_secs=2)
         results = agent.train_RL(opts.epochs, files, logger, opts.proof, opts.sample)
     else:

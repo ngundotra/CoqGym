@@ -49,6 +49,13 @@ class Prover(nn.Module):
             j += 1
         goal_embeddings = torch.stack(goal_embeddings)
 
+        # if len(environment_embeddings) > 1:
+        #     pdb.set_trace()
+        # if len(context_embeddings) > 1:
+        #     pdb.set_trace()
+        # if len(goal_embeddings) > 1:
+        #     pdb.set_trace()
+        # pdb.set_trace()
         return environment_embeddings, context_embeddings, goal_embeddings
 
 
@@ -77,6 +84,9 @@ class Prover(nn.Module):
         local_context = {'idents': [v['ident'] for v in local_context],
                          'embeddings': context_embeddings[0],
                          'quantified_idents': [v['ast'].quantified_idents for v in local_context]}
+
+        if len(goal_embeddings) != 1:
+            print("Goal embeddings length:", len(goal_embeddings))
         goal = {'embeddings': goal_embeddings, 'quantified_idents': goal.quantified_idents}
         if train:
             asts = self.tactic_decoder.beam_search_train(environment, local_context, goal)

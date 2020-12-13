@@ -239,7 +239,7 @@ class TacticDecoder(nn.Module):
                 candidates = goal['quantified_idents']
             token = random.choice(candidates)
 
-        # generadddte a token with the lex rule
+        # generate a token with the lex rule
         node.expand(token_gt if teacher_forcing else token)
 
         return loss

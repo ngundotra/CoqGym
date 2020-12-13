@@ -15,7 +15,7 @@ import pdb
 from hashlib import sha1
 import gc
 from copy import deepcopy
-from time import time
+import time
 
 # Custom Sampling Techniques (highly advanced, >9000 IQ)
 from sampler import ParallelSampler
@@ -164,10 +164,12 @@ class Agent:
         last_ep = 0
         try:
             for ep in range(n_epoch):
-                start = time.Time()
+                start = time.time()
                 last_ep = ep
                 print("\n>>>>>>>>>>>>>>>>>>>>EPOCH: {}<<<<<<<<<<<<<<<<<<<<<<\n".format(ep))
                 results, grads, collected, losses, len_fg_bg = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
+                num_success = sum([int(result[0]) for result in results])
+                num_fail = sum([int(not result[0]) for result in results])
                 all_results += results
                 total_collected += collected
                 
@@ -183,7 +185,9 @@ class Agent:
                 logger.log_value("num_collected", collected, ep)
                 logger.log_value("num_fg", len_fg_bg[0], ep)
                 logger.log_value("num_bg", len_fg_bg[1], ep)
-                logger.log_value('time', time.Time() - start, ep)
+                logger.log_value("num_success", num_success, ep)
+                logger.log_value("num_fail", num_fail, ep)
+                logger.log_value('time', time.time() - start, ep)
                 # todo: how to get numsteps?
                 loss_graph.append(avg_loss)
                 self.optimizer.step()
@@ -233,6 +237,7 @@ class Agent:
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+        os.makedirs(save_folder, exist_ok=True)
         self.save(n_epoch, "train-DFS-ckpt/{}/".format(self.descriptor))
         return results
 
@@ -506,9 +511,6 @@ class Agent:
             # -----Exploration-----
             obs_string = None #TODO: a string identifier for the current obs
             tac_string = None #TODO: a string identifier for the current tac
-            # f - f_hat
-            # f is input -> embedding
-            # maximize(f-f_hat)
 
             # Nsa
             if obs_string not in Nsa.keys():

@@ -42,6 +42,7 @@ class ParallelSampler:
         ended_workers = 0
         grads = None
         collected = 0
+        len_fg_bg = [0, 0]
         results = []
         losses = []
         while ended_workers != n_epochs:
@@ -54,11 +55,14 @@ class ParallelSampler:
                 async_results = res['results']
                 async_collected = res['collected']
                 async_loss = res['loss']
+                async_len_fg_bg = res['len_fg_bg']
 
                 # Process gradients (sum them)
                 grads = ParallelSampler._join_grads(grads, async_grads, clone=True)
                 del async_grads
                 collected += async_collected
+                len_fg_bg[0] += async_len_fg_bg[0]
+                len_fg_bg[1] += async_len_fg_bg[1]
                 results += async_results
                 losses.append(async_loss)
 
@@ -69,7 +73,7 @@ class ParallelSampler:
         print("->\tDone!")
         log("------------------FINISHED ASYNC-------------------")
         # assert collected == len(rewards), "{} collected != {} rewards".format(collected, len(rewards))
-        return results, grads, collected, losses
+        return results, grads, collected, losses, len_fg_bg
 
     def sample_dfs_trajectories(self, n_epochs=1, **kwargs):
         """
@@ -156,6 +160,8 @@ class ParallelSampler:
                     data = self.agent.sample_once(proof_env, self.tac_template, train=True)
                     trajectory, results = data['samples'], data['results']
                     collected = len(trajectory)
+                    fg_goals, bg_goals, shelved, given_up = proof_env.serapi.query_goals()
+                    len_fg_bg = (len(fg_goals), len(bg_goals))
 
                     # Backpropagate loss
                     losses = torch.cat([(prob * -r).unsqueeze(0) for prob, r in trajectory]).to(trajectory[0][0].device)
@@ -168,7 +174,8 @@ class ParallelSampler:
                     queue.put({'grads': grads, 
                     'collected': collected, 
                     'results': results,
-                    'loss': loss.detach().item()})
+                    'loss': loss.detach().item(),
+                    "len_fg_bg": len_fg_bg})
         # except Exception as e:
         #     print("{}: ERROR-{}".format(pid,e))
         queue.put(None)

@@ -144,7 +144,7 @@ class Agent:
             results, total_collected = self.train_RL_PG(n_epoch, 4, file_list, logger, with_hammer, hammer_timeout)
             return results + [total_collected]
         elif sample == "DFS":
-            return self.train_RL_DFS(n_epochs, with_hammer, hammer_timeout)
+            return self.train_RL_DFS(n_epoch, file_list, with_hammer, hammer_timeout)
         else:
             raise ValueError('Sampling method not found.')
 
@@ -164,9 +164,10 @@ class Agent:
         last_ep = 0
         try:
             for ep in range(n_epoch):
+                start = time.Time()
                 last_ep = ep
                 print("\n>>>>>>>>>>>>>>>>>>>>EPOCH: {}<<<<<<<<<<<<<<<<<<<<<<\n".format(ep))
-                results, grads, collected, losses = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
+                results, grads, collected, losses, len_fg_bg = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
                 all_results += results
                 total_collected += collected
                 
@@ -179,6 +180,11 @@ class Agent:
                 
                 print("\tEpoch loss{}: {}".format(ep, avg_loss))
                 logger.log_value('loss', avg_loss, ep)
+                logger.log_value("num_collected", collected, ep)
+                logger.log_value("num_fg", len_fg_bg[0], ep)
+                logger.log_value("num_bg", len_fg_bg[1], ep)
+                logger.log_value('time', time.Time() - start, ep)
+                # todo: how to get numsteps?
                 loss_graph.append(avg_loss)
                 self.optimizer.step()
         except KeyboardInterrupt as kb:
@@ -189,49 +195,45 @@ class Agent:
         self.save(last_ep+1, save_folder)
         return results, total_collected
 
-    def train_RL_DFS(self, n_epoch, with_hammer, hammer_timeout):
+    def train_RL_DFS(self, n_epoch, file_list, with_hammer, hammer_timeout):
         """
         TODO: put in `RL_Trainer` sort of file ...?
         Collects samples & updates the model in accordance with DFS sampling
         """
+        tac_template = self.get_tac_template()
         for curr_epoch in range(n_epoch):
             print("\n---EPOCH---")
             print("-----{}-----\n".format(curr_epoch))
-            with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer,
-                         hammer_timeout=hammer_timeout) as file_env:
-                results = []
-                loss = None
-                for proof_env in file_env:  # start a proof
-                    curr_name = proof_env.proof['name']
-                    if proof_name is not None and curr_name != proof_name:
-                        continue
-                    print('proof: ', proof_env.proof['name'])
-                    # success, proof_pred, time, num_tactics, trajectory = self.prove(proof_env, train=True)
-                    samples, Nsa, Ns = self.prove(proof_env, train=True, sample=sample) # TODO: control number of samples better
+            for filename in file_list:
+                with FileEnv(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer=with_hammer,
+                            hammer_timeout=hammer_timeout) as file_env:
+                    results = []
+                    loss = None
+                    for proof_env in file_env:  # start a proof
+                        curr_name = proof_env.proof['name']
+                        print('proof: ', proof_env.proof['name'])
+                        # success, proof_pred, time, num_tactics, trajectory = self.prove(proof_env, train=True)
+                        samples, Nsa, Ns = self.sample_DFS(proof_env, tac_template) # TODO: control number of samples better
 
-                    losses_env = [((Ns[state]/Nsa[state][action]).to(logprob.device)
-                                    * torch.exp(logprob)
-                                    * (-logprob)
-                                    * (reward).to(logprob.device)).unsqueeze(0)
-                                    for state, action, logprob, reward in samples]
+                        # Importance Sampling
+                        # losses_env = [((Ns[state]/Nsa[state][action]).to(logprob.device)
+                        losses_env = [ ((-logprob)
+                                        * (reward)).unsqueeze(0)
+                                        for state, action, logprob, reward in samples]
 
-                    if loss is None:
-                        loss = torch.cat(losses_env).mean()
-                    else:
-                        loss += torch.cat(losses_env).mean()
-                    if torch.isnan(loss):
-                        print("=======NAN=======")
-                        pdb.set_trace()
+                        if loss is None:
+                            loss = torch.cat(losses_env).mean()
+                        else:
+                            loss += torch.cat(losses_env).mean()
+                        if torch.isnan(loss):
+                            print("=======NAN=======")
+                            pdb.set_trace()
 
-                    if proof_name is not None:
-                        break
-
-            print("\tLoss: {}".format(loss.item()))
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-
-        self.save(n_epoch, "train-ckpt/")
+                print("\tLoss: {}".format(loss.item()))
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+        self.save(n_epoch, "train-DFS-ckpt/{}/".format(self.descriptor))
         return results
 
     def valid(self, n_epoch):
@@ -502,8 +504,8 @@ class Agent:
                 tac, logprob = stack[-1].pop()
 
             # -----Exploration-----
-            # obs_string = None #TODO: a string identifier for the current obs
-            # tac_string = None #TODO: a string identifier for the current tac
+            obs_string = None #TODO: a string identifier for the current obs
+            tac_string = None #TODO: a string identifier for the current tac
             # f - f_hat
             # f is input -> embedding
             # maximize(f-f_hat)
@@ -531,8 +533,7 @@ class Agent:
                 samples = [(obs_string, tac_string, logprob, 1) for obs_string, tac_string, logprob in prob_list]
                 sample_list.extend(samples)
                 prob_list.pop(-1)
-                proof_env.serapi.pop() #TODO: find out if this works
-                continue
+                return sample_list, Nsa, Ns
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
                 # TODO: reassure that its the total number of tactics over the whole beam search but not along the trajectory.
                 #       Change the reward to -0.1 if its the latter.

@@ -82,7 +82,8 @@ class TacticDecoder(nn.Module):
         self.lex_rule_embeddings = nn.Embedding(len(self.grammar.terminal_symbols), opts.embedding_dim)
         self.default_action_embedding = torch.zeros(self.opts.embedding_dim, device=self.opts.device)
         self.default_state = torch.zeros(self.opts.hidden_dim, device=self.opts.device)
-        self.controller = nn.GRUCell(2 * opts.embedding_dim + 2 * opts.term_embedding_dim + 6 + opts.hidden_dim + opts.symbol_dim, opts.hidden_dim)
+        self.controller = nn.GRUCell(2 * opts.embedding_dim + 2 * opts.term_embedding_dim + 6 + opts.hidden_dim + opts.symbol_dim,
+                opts.hidden_dim)
         self.state_decoder = nn.Sequential(nn.Linear(opts.hidden_dim, opts.embedding_dim), nn.Tanh())
         self.context_reader = ContextReader(opts)
         self.context_retriever = ContextRetriever(opts)
@@ -460,8 +461,13 @@ class TacticDecoder(nn.Module):
             r = [torch.cat([environment['embeddings'], local_context['embeddings']], dim=0) for i in indice]
             u_t = self.context_reader(s_tm1, r)
 
-            states = self.controller(torch.cat([a_tm1, goal['embeddings'].expand(len(indice), -1), u_t, p_t, n_t], dim=1), s_tm1)
-
+            controller_input = torch.cat([a_tm1, goal['embeddings'].expand(len(indice), -1), u_t, p_t, n_t], dim=1)
+            states = self.controller(controller_input, s_tm1)
+            if states.size()[0] != 1:
+                print("States size: {}\tInput size: {}\t s_tm1 size: {}".format(states.size(),
+                    controller_input.size(), 
+                    s_tm1.size()))
+                # pdb.set_trace()
             # compute the log likelihood and pick the top candidates
             beam_candidates = []
             for j, idx in enumerate(indice):
@@ -544,6 +550,16 @@ class TacticDecoder(nn.Module):
         complete_trees = sorted(complete_trees, key=lambda x: x[1], reverse=True)  # pick the top ASTs
         return complete_trees[:self.opts.num_tactic_candidates]
 
+    def sample_item(self, log_cond_prob, rules):
+        """
+        Creates Categorical distribution based on logits, and samples from it
+        """
+        rule_dist = torch.distributions.Categorical(logits=log_cond_prob)
+        n = rule_dist.sample()
+        if rules is None:
+            return n, None
+        return n, rules[n]
+
     def simple_search(self, environment, local_context, goal):
         """
         Uses torch.random_sample to choose a random node to expand, return that (tree?)
@@ -574,7 +590,7 @@ class TacticDecoder(nn.Module):
 
             # compute the log likelihood and pick the top candidates
             beam_candidates = []
-            pdb.set_trace()
+            # pdb.set_trace()
             for j, idx in enumerate(indice):
                 stack = frontiers[idx]
                 node = stack[-1]
@@ -589,9 +605,8 @@ class TacticDecoder(nn.Module):
                         log_cond_prob = logits - logits.logsumexp(dim=0)
 
                         # Here we randomly sample weighted by log_cond_prob :) PoG
-                        np.random.choice(np.arange(len(applicable_rules)), p=log_cond_prob)
-                        for n, cand in enumerate(applicable_rules):
-                            beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob[n], cand))
+                        n, cand = self.sample_item(log_cond_prob, applicable_rules)
+                        beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob[n], cand))
 
                 elif node.symbol in ['QUALID', 'LOCAL_IDENT']:
                     if node.symbol == 'QUALID':
@@ -601,8 +616,8 @@ class TacticDecoder(nn.Module):
                     if candidates == []:
                         candidates = ['H'] + goal['quantified_idents']
                         log_cond_prob = - math.log(len(candidates))
-                        for cand in candidates:
-                            beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob, cand))
+                        _, cand = self.sample_item(log_cond_prob, candidates)
+                        beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob, cand))
                     else:
                         if node.symbol == 'QUALID':
                             candidate_embeddings = torch.cat([environment['embeddings'], local_context['embeddings']])
@@ -610,20 +625,20 @@ class TacticDecoder(nn.Module):
                             candidate_embeddings = local_context['embeddings']
                         context_scores = self.context_retriever(node.state, candidate_embeddings)
                         log_cond_prob = context_scores - context_scores.logsumexp(dim=0)
-                        for n, cand in enumerate(candidates):
-                            beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob[n], cand))
+                        n, cand = self.sample_item(log_cond_prob, candidates)
+                        beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob[n], cand))
                        
                 elif node.symbol == 'INT':
                     cls = self.INT_classifier(node.state)
                     log_cond_prob = cls - cls.logsumexp(dim=0)
-                    for n in range(cls.size(0)):
-                        beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob[n], str(n + 1)))
+                    n, _ = self.sample_item(log_cond_prob, None)
+                    beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob[n], str(n + 1)))
 
                 elif node.symbol == 'HINT_DB':
                     cls = self.HINT_DB_classifier(node.state)
                     log_cond_prob = cls - cls.logsumexp(dim=0)
-                    for n in range(cls.size(0)):
-                        beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob[n], self.hint_dbs[n]))
+                    n, hint = self.sample_item(log_cond_prob, self.hint_dbs)
+                    beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob[n], hint))
               
                 elif node.symbol == 'QUANTIFIED_IDENT':
                     if len(goal['quantified_idents']) > 0:
@@ -631,8 +646,9 @@ class TacticDecoder(nn.Module):
                     else:
                         candidates = ['x']
                     log_cond_prob = - math.log(len(candidates))
-                    for cand in candidates:
-                        beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob, cand))
+                    _, cand = self.sample_item(torch.Tensor([log_cond_prob]).to(node.state.device),
+                        candidates)
+                    beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob, cand))
 
             assert len(beam_candidates) == 1
             # expand the nodes and update the beam
@@ -651,6 +667,7 @@ class TacticDecoder(nn.Module):
                 new_beam.append(ast)
                 new_frontiers.append(stack)
                 new_log_likelihood.append(log_likelihood[idx] + log_cond_prob)
+                print("SEARCHING:\n", node)
             beam = new_beam
             frontiers = new_frontiers
             log_likelihood = new_log_likelihood

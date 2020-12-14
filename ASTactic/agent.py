@@ -141,7 +141,7 @@ class Agent:
         # TODO: train with training `data_batch` instead. Create `proof_env` for each data.
         # {proof_name: [lowest loss, success]}
         if sample == "vanilla":
-            results, total_collected = self.train_RL_PG(n_epoch, 4, file_list, logger, with_hammer, hammer_timeout)
+            results, total_collected = self.train_RL_PG(n_epoch, self.opts.workers, file_list, logger, with_hammer, hammer_timeout)
             return results + [total_collected]
         elif sample == "DFS":
             return self.train_RL_DFS(n_epoch, file_list, with_hammer, hammer_timeout)
@@ -153,6 +153,10 @@ class Agent:
         Collects hella samples for Policy Gradients.
         Uses parallel workers if `opts.parallel`
         """
+        print("Making sure save_folder exists...")
+        save_folder= "train-PG-ckpt/{}/".format(self.descriptor)
+        print("+ Good to go +")
+        os.makedirs(save_folder, exist_ok=True)
         tac_template = self.get_tac_template()
         file_env_args = [(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer, hammer_timeout)
                 for filename in file_list]
@@ -168,6 +172,7 @@ class Agent:
                 last_ep = ep
                 print("\n>>>>>>>>>>>>>>>>>>>>EPOCH: {}<<<<<<<<<<<<<<<<<<<<<<\n".format(ep))
                 results, grads, collected, losses, len_fg_bg = self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
+                print(results)
                 num_success = sum([int(result[0]) for result in results])
                 num_fail = sum([int(not result[0]) for result in results])
                 all_results += results
@@ -194,8 +199,6 @@ class Agent:
         except KeyboardInterrupt as kb:
             print("Ended on epoch: {}".format(last_ep))
 
-        save_folder= "train-PG-ckpt/{}/".format(self.descriptor)
-        os.makedirs(save_folder, exist_ok=True)
         self.save(last_ep+1, save_folder)
         return results, total_collected
 
@@ -204,6 +207,11 @@ class Agent:
         TODO: put in `RL_Trainer` sort of file ...?
         Collects samples & updates the model in accordance with DFS sampling
         """
+        save_folder = "train-DFS-ckpt/{}/".format(self.descriptor)
+        print("Making sure save folder exists...")
+        os.makedirs(save_folder, exist_ok=True)
+        print("+ Good to go +")
+
         tac_template = self.get_tac_template()
         for curr_epoch in range(n_epoch):
             print("\n---EPOCH---")
@@ -237,8 +245,7 @@ class Agent:
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
-        os.makedirs(save_folder, exist_ok=True)
-        self.save(n_epoch, "train-DFS-ckpt/{}/".format(self.descriptor))
+        self.save(n_epoch, save_folder)
         return results
 
     def valid(self, n_epoch):
@@ -395,24 +402,43 @@ class Agent:
         raise NotImplementedError
 
     def sample_once(self, proof_env, tac_template, train=False):
+        """
+        Train is not used for anything
+        """
         obs = proof_env.init()
         env = filter_env(obs['env'])
 
-        if 'fg_goals' not in obs:
-            print(proof_env.proof['name'])
-            pdb.set_trace()
         first_goal_signatures = {get_goal_signature(obs['fg_goals'][0])}
 
+        return self._rollout_asts(proof_env, obs, env, first_goal_signatures)
+
+    def _get_tactics(self, obs, env, sampling="PG"):
+        """
+        Helper method of sample_once that returns a tactic and prob_list form 
+        """
+        tac_template = self.get_tac_template()
+
+        local_context, goal = parse_goal(obs['fg_goals'][0])
+        tactics = self.model.beam_search(env, local_context, goal, sampling)
+        tacs = [tac_template % tac.to_tokens() for tac, _ in tactics]
+        probs = torch.cat([prob.unsqueeze(0) for _, prob in tactics])
+        return tactics, tacs, probs
+
+    def _rollout_asts(self, proof_env, init_obs, env, first_goal_signatures):
+        """
+        Helper method of sample_once that abstracts away process of applying a tactic
+        and interacting with the proof environment.
+
+        Rolls out multiple times until end conditions are reached.
+
+        Returns {samples: samples, results: results}
+        """
         # store logprobs (along the trajectory) to be rewarded later
         prob_list = []
 
         # initialize
-        local_context, goal = parse_goal(obs['fg_goals'][0])
-        tactics = self.model.beam_search(env, local_context, goal, train)
-        tacs = [tac_template % tac.to_tokens() for tac, _ in tactics]
-        probs = torch.cat([prob.unsqueeze(0) for _, prob in tactics])
+        tactics, tacs, probs = self._get_tactics(init_obs, env)
         script = []
-
         steps = 0
         while True and steps < 1e3:
             steps += 1
@@ -456,10 +482,8 @@ class Agent:
                     samples = [(logprob, -0.1) for logprob in prob_list]  #TODO: set reward to 0 or -0.1?
                     return {'samples': samples, 'results': (False, script, time, num_tactics)}
 
-                local_context, goal = parse_goal(obs['fg_goals'][0])
-                tactics = self.model.beam_search(env, local_context, goal, train)
-                tacs = [tac_template % tac.to_tokens() for tac, _ in tactics]
-                probs = torch.cat([prob.unsqueeze(0) for _, prob in tactics])
+                # Sample again if we ran out of tactics
+                tactics, tacs, probs = self._get_tactics(obs, env)
 
         raise RuntimeError('huh?')
 
@@ -534,7 +558,6 @@ class Agent:
                 script.append(tac)
                 samples = [(obs_string, tac_string, logprob, 1) for obs_string, tac_string, logprob in prob_list]
                 sample_list.extend(samples)
-                prob_list.pop(-1)
                 return sample_list, Nsa, Ns
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
                 # TODO: reassure that its the total number of tactics over the whole beam search but not along the trajectory.

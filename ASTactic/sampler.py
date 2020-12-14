@@ -63,7 +63,7 @@ class ParallelSampler:
                 collected += async_collected
                 len_fg_bg[0] += async_len_fg_bg[0]
                 len_fg_bg[1] += async_len_fg_bg[1]
-                results += async_results
+                results.append(async_results)
                 losses.append(async_loss)
 
         done.set()
@@ -128,7 +128,7 @@ class ParallelSampler:
                 grads = ParallelSampler._join_grads(grads, async_grads, clone=True)
                 del async_grads
                 collected += async_collected
-                results += async_results
+                results.append(async_results)
                 losses.append(async_loss)
 
         done.set()

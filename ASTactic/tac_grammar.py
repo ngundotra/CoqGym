@@ -117,7 +117,7 @@ class NonterminalNode(Node):
 
 
     def __str__(self):
-        return 'NonterminalNode(%s, children=%s)' % (self.symbol, str(self.children))
+        return 'NonterminalNode(%s, action=%s, children=%s)' % (self.symbol, self.action, str(self.children))
 
 
     def __repr__(self):

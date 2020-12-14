@@ -75,7 +75,7 @@ class Prover(nn.Module):
         return asts, loss
 
 
-    def beam_search(self, environment, local_context, goal, train=False):
+    def beam_search(self, environment, local_context, goal, sampling=None):
         environment_embeddings, context_embeddings, goal_embeddings = \
           self.embed_terms([environment], [local_context], [goal])
         environment = {'idents': [v['qualid'] for v in environment],
@@ -88,7 +88,10 @@ class Prover(nn.Module):
         if len(goal_embeddings) != 1:
             print("Goal embeddings length:", len(goal_embeddings))
         goal = {'embeddings': goal_embeddings, 'quantified_idents': goal.quantified_idents}
-        if train:
+        if sampling == "PG":
+            # asts = self.tactic_decoder.beam_search_train(environment, local_context, goal)
+            asts = self.tactic_decoder.simple_search(environment, local_context, goal)
+        elif sampling == "DFS":
             asts = self.tactic_decoder.beam_search_train(environment, local_context, goal)
         else:
             asts = self.tactic_decoder.beam_search(environment, local_context, goal)

@@ -440,7 +440,7 @@ class Agent:
         tactics, tacs, probs = self._get_tactics(init_obs, env)
         script = []
         steps = 0
-        while True and steps < 1e3:
+        while True and steps < self.opts.max_num_tactics + 1:
             steps += 1
 
             m = torch.distributions.Categorical(probs)
@@ -485,7 +485,12 @@ class Agent:
                 # Sample again if we ran out of tactics
                 tactics, tacs, probs = self._get_tactics(obs, env)
 
-        raise RuntimeError('huh?')
+
+        print("Ran out of tactics? or surpassed num steps...")
+        time = self.opts.timeout - obs['time_left']
+        num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
+        samples = [(logprob, -0.1) for logprob in prob_list]  #TODO: set reward to 0 or -0.1?
+        return {'samples': samples, 'results': (False, script, time, num_tactics)}
 
     def sample_DFS(self, proof_env, tac_template, train=True):
         """

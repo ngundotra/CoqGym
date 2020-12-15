@@ -45,6 +45,7 @@ class ParallelSampler:
         len_fg_bg = [0, 0]
         results = []
         losses = []
+        expl_bonuses = {}
         while ended_workers != n_epochs:
             res = queue.get()
             if res is None:
@@ -56,9 +57,12 @@ class ParallelSampler:
                 async_collected = res['collected']
                 async_loss = res['loss']
                 async_len_fg_bg = res['len_fg_bg']
+                async_exp_bonuses = res['exp_bonuses']
 
                 # Process gradients (sum them)
                 grads = ParallelSampler._join_grads(grads, async_grads, clone=True)
+                print("async: bonuses", async_exp_bonuses)
+                ParallelSampler._join_bonuses(expl_bonuses, async_exp_bonuses)
                 del async_grads
                 collected += async_collected
                 len_fg_bg[0] += async_len_fg_bg[0]
@@ -73,7 +77,7 @@ class ParallelSampler:
         print("->\tDone!")
         log("------------------FINISHED ASYNC-------------------")
         # assert collected == len(rewards), "{} collected != {} rewards".format(collected, len(rewards))
-        return results, grads, collected, losses, len_fg_bg
+        return results, grads, collected, losses, len_fg_bg, expl_bonuses
 
     def sample_dfs_trajectories(self, n_epochs=1, **kwargs):
         """
@@ -151,33 +155,34 @@ class ParallelSampler:
         pid, queue, done = args[0], args[1], args[2]
         print("{}: started collection".format(pid))
         for fenvargs in self.file_env_args:
-            try:
-                with FileEnv(*fenvargs) as fenv:
-                    prob_grads = None
-                    for proof_env in fenv:
-                        self.agent.optimizer.zero_grad()
-                        # Collect data we can backprop
-                        data = self.agent.sample_once(proof_env, self.tac_template, train=True)
-                        trajectory, results = data['samples'], data['results']
-                        collected = len(trajectory)
-                        fg_goals, bg_goals, shelved, given_up = proof_env.serapi.query_goals()
-                        len_fg_bg = (len(fg_goals), len(bg_goals))
+            # try:
+            with FileEnv(*fenvargs) as fenv:
+                prob_grads = None
+                for proof_env in fenv:
+                    self.agent.optimizer.zero_grad()
+                    # Collect data we can backprop
+                    data = self.agent.sample_once(proof_env, self.tac_template, train=True)
+                    trajectory, results, exp = data['samples'], data['results'], data['exp']
+                    collected = len(trajectory)
+                    fg_goals, bg_goals, shelved, given_up = proof_env.serapi.query_goals()
+                    len_fg_bg = (len(fg_goals), len(bg_goals))
 
-                        # Backpropagate loss
-                        losses = torch.cat([(prob * -r).unsqueeze(0) for prob, r in trajectory]).to(trajectory[0][0].device)
-                        loss = torch.mean(losses)
-                        loss.backward() # loss.backward(retain_graph=True) is VERY expensive
-                        grads = [p.grad if p.grad is not None else None for p in self.agent.model.parameters()]
+                    # Backpropagate loss
+                    losses = torch.cat([(prob * -r).unsqueeze(0) for prob, r in trajectory]).to(trajectory[0][0].device)
+                    loss = torch.mean(losses)
+                    loss.backward() # loss.backward(retain_graph=True) is VERY expensive
+                    grads = [p.grad if p.grad is not None else None for p in self.agent.model.parameters()]
 
-                        print("{}: collected {}".format(pid, collected))
-                        print("{}: results {}".format(pid, results))
-                        queue.put({'grads': grads, 
-                        'collected': collected, 
-                        'results': results,
-                        'loss': loss.detach().item(),
-                        "len_fg_bg": len_fg_bg})
-            except Exception as e:
-                print("{}: ERROR-{}".format(pid,e))
+                    print("{}: collected {}".format(pid, collected))
+                    print("{}: results {}".format(pid, results))
+                    queue.put({'grads': grads, 
+                    'collected': collected, 
+                    'results': results,
+                    'loss': loss.detach().item(),
+                    "len_fg_bg": len_fg_bg,
+                    'exp_bonuses': exp})
+            # except Exception as e:
+            #     print("{}: ERROR-{}".format(pid,e))
         queue.put(None)
         print("{}: finished & waiting".format(pid))
         done.wait()
@@ -203,3 +208,27 @@ class ParallelSampler:
                 elif grad is not None:
                     old[i] = grad
         return old        
+
+    @staticmethod
+    def _join_bonuses(old, new):
+        """
+        Joins dictionary of bonuses collected per proof
+        """
+        found_numerical = 0
+        for k,v in new.items():
+            if k not in old:
+                old[k] = v
+            elif v is not None:
+                found_numerical = 1
+                old[k] += v
+
+        if 'added' not in old:
+            old['added'] = found_numerical
+        else:
+            old['added'] += found_numerical
+
+    @staticmethod
+    def _coalesce_bonuses(bonuses):
+        if bonuses['added'] > 0:
+            bonuses['exp_avg'] /= bonuses['added']
+            bonuses['exp_std'] /= bonuses['added']

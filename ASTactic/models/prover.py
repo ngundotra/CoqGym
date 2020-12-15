@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 from tac_grammar import CFG
 from .tactic_decoder import TacticDecoder
 from .term_encoder import TermEncoder

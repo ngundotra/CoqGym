@@ -36,6 +36,7 @@ if __name__ == '__main__':
     parser.add_argument('--sample', choices=['vanilla', 'DFS'], type=str, default='DFS')
     parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--workers', type=int, default=4)
+    parser.add_argument('--exp_path', type=str, default=None)
     # End Custom
     parser.add_argument('--file', type=str)
     parser.add_argument('--project', type=str)

@@ -616,7 +616,7 @@ class TacticDecoder(nn.Module):
                     if candidates == []:
                         candidates = ['H'] + goal['quantified_idents']
                         log_cond_prob = - math.log(len(candidates))
-                        _, cand = self.sample_item(log_cond_prob, candidates)
+                        _, cand = self.sample_item(torch.Tensor([log_cond_prob]).to(node.state.device), candidates)
                         beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob, cand))
                     else:
                         if node.symbol == 'QUALID':

@@ -84,12 +84,26 @@ if __name__ == '__main__':
     else:
         model = None
 
+    exp_model = None
+    if 'exp' in opts.method:
+        exp_model = Prover(opts)
+        log('loading exploration model checkpoint from {} ...'.format(opts.exp_path))
+        if opts.device.type == 'cpu':
+            checkpoint = torch.load(opts.path, map_location='cpu')
+        else:
+            checkpoint = torch.load(opts.path)
+        exp_model.load_state_dict(checkpoint['state_dict'])
+        exp_model.to(opts.device)
+
     optimizer = None
     if opts.train_rl:
         optimizer = torch.optim.RMSprop(model.parameters(), lr=3e-5,
                                         momentum=0.9,
                                         weight_decay=1e-6)
     agent = Agent(model, optimizer, None, opts)
+
+    if exp_model is not None:
+        agent.exp_model = exp_model
 
     print(opts.file, opts.folder)
     if opts.file:

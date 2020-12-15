@@ -20,6 +20,13 @@ class Prover(nn.Module):
         self.term_encoder = TermEncoder(opts)
         
 
+    def freeze_encoding(self):
+        """
+        Freeze the encoding parameters so we can measure novelty of states during exploration.
+        """
+        for param in self.term_encoder.parameters():
+            param.requires_grad = False
+
     def embed_terms(self, environment, local_context, goal):
         all_asts = list(chain([env['ast'] for env in chain(*environment)], [context['ast'] for context in chain(*local_context)], goal))
         all_embeddings = self.term_encoder(all_asts)
@@ -49,15 +56,29 @@ class Prover(nn.Module):
             j += 1
         goal_embeddings = torch.stack(goal_embeddings)
 
-        # if len(environment_embeddings) > 1:
-        #     pdb.set_trace()
-        # if len(context_embeddings) > 1:
-        #     pdb.set_trace()
-        # if len(goal_embeddings) > 1:
-        #     pdb.set_trace()
-        # pdb.set_trace()
         return environment_embeddings, context_embeddings, goal_embeddings
 
+    @staticmethod
+    def _dist_embeddings(self, embedding1, embedding2):
+        """
+        Computes cosine distance between embeddings.
+
+        Returns 1/3 * (sum {cos_dist(e1, e2)} over env, context and goal embeddings)
+        """
+        cos = torch.nn.CosineSimilarity(dim=1, eps=1e-8)
+        dist = 0
+        for (e1, e2) in zip(embedding1, embedding2):
+            cos_dists = []
+            for (emb1, emb2) in zip(e1, e2):
+                # Context embedding sometimes has 0 rows
+                if len(emb1) == 0 or len(emb2) == 0:
+                    continue
+
+                # yes this is practically CosineEmbeddingLoss, but creating
+                # the necessary y-tensor of ones seemed tedious
+                cos_dists += torch.mean(1 - cos(emb1, emb2)).detach()
+            dist += np.mean(cos_dists) / 3
+        return dist
 
     def forward(self, environment, local_context, goal, actions, teacher_forcing):
         environment_embeddings, context_embeddings, goal_embeddings = \

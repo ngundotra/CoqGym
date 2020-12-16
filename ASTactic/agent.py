@@ -170,9 +170,9 @@ class Agent:
         Uses parallel workers if `opts.parallel`
         """
         print("Making sure save_folder exists...")
-        save_folder= "train-PG-ckpt/{}/".format(self.descriptor)
+        # save_folder= "train-PG-ckpt/{}/".format(self.descriptor)
+        os.makedirs(self.true_logdir, exist_ok=True)
         print("+ Good to go +")
-        os.makedirs(save_folder, exist_ok=True)
         tac_template = self.get_tac_template()
         file_env_args = [(filename, self.opts.max_num_tactics, self.opts.timeout, with_hammer, hammer_timeout)
                 for filename in file_list]
@@ -210,7 +210,7 @@ class Agent:
             print("Ended on epoch: {}".format(last_ep))
 
         print("***Saving model***")
-        self.save(last_ep+1, save_folder)
+        self.save(last_ep+1, self.true_logdir)
         print("Saved model on epoch {} to {}".format(last_ep+1, save_folder))
         return results, total_collected
 
@@ -245,9 +245,8 @@ class Agent:
         TODO: put in `RL_Trainer` sort of file ...?
         Collects samples & updates the model in accordance with DFS sampling
         """
-        save_folder = "train-DFS-ckpt/{}/".format(self.descriptor)
         print("Making sure save folder exists...")
-        os.makedirs(save_folder, exist_ok=True)
+        os.makedirs(self.true_logdir, exist_ok=True)
         print("+ Good to go +")
 
         tac_template = self.get_tac_template()
@@ -298,7 +297,7 @@ class Agent:
         except KeyboardInterrupt as kb:
             print("Excepted kb interrupt")
         print("Saving model*")
-        self.save(last_ep, save_folder)
+        self.save(last_ep, self.true_logdir)
         print("-Saved model-")
         return results
 

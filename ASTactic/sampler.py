@@ -23,7 +23,7 @@ class ParallelSampler:
         self.file_env_args = file_env_args
         self.agent = agent
         self.train = train
-        agent.model.share_memory()
+        # agent.model.share_memory()
         # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
     def sample_trajectories(self, n_epochs=1, **kwargs):

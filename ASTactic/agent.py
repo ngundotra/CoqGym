@@ -536,7 +536,6 @@ class Agent:
             prob_list.append(prob)
             obs = proof_env.step(tac)
 
-            fg_goals, bg_goals, shelved_goals, _ = proof_env.serapi.query_goals()
             # Keep track of these things in case we exit in if-else block
             time = self.opts.timeout - obs['time_left']
             num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
@@ -558,6 +557,7 @@ class Agent:
                 assert obs['result'] == 'PROVING'
 
             script.append(tac)
+            fg_goals, _, _, _ = proof_env.serapi.query_goals()
             sig = get_goal_signature(fg_goals[0]) #TODO: should we care about this in sampling?
             if sig in first_goal_signatures:
                 proof_env.step('Undo.')

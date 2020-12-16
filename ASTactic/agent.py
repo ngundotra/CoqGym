@@ -17,6 +17,7 @@ import gc
 from copy import deepcopy
 import time
 from models.prover import Prover
+from rnd import RandomDistillation
 
 # Custom Sampling Techniques (highly advanced, >9000 IQ)
 from sampler import ParallelSampler
@@ -93,9 +94,18 @@ class Agent:
         self.dataloader = dataloader
         self.opts = opts
         self.projs_split = json.load(open(opts.projs_split))
-        if opts.freeze:
-            for p in self.model.parameters():
+        if opts.freeze: # Freeze prover encoder module
+            self.model.term_encoder.requires_grad_ = False
+            for p in self.model.term_encoder.parameters():
                 p.requires_grad = False
+
+        if opts.RND:
+            self.RND_fixed = RandomDistillation(opts, fixed=True)
+            self.RND_fixed.requires_grad = False
+            self.RND_train = RandomDistillation(opts, fixed=False)
+            self.RND_optimizer = torch.optim.RMSprop(self.RND_train.parameters(), lr=3e-5,
+                                        momentum=0.9,
+                                        weight_decay=1e-6)
         # Just set this to None so we can check if it exists for exploration bonuses
         self.exp_model = None
 
@@ -182,12 +192,19 @@ class Agent:
                 total_collected += collected
 
                 params = self.model.parameters()
-                for idx, (layer, grad) in enumerate(zip(params, grads)):
+                for idx, (layer, grad) in enumerate(zip(params, grads['model'])):
                     if grad is not None:
                         layer.grad = grad / collected
-                self._log_epoch(logger, ep, start, results, collected, losses, len_fg_bg, expl_bonus)
-                
                 self.optimizer.step()
+                self._log_epoch(logger, ep, start, results, collected, losses, len_fg_bg, expl_bonus)
+
+                if self.opts.RND:
+                    self.RND_optimizer.zero_grad()
+                    for idx, (layer, grad) in enumerate(zip(self.RND_train.parameters(), grads['RND'])):
+                        if grad is not None:
+                            layer.grad = grad / collected
+                    self.RND_optimizer.step()
+
         except KeyboardInterrupt as kb:
             print("Ended on epoch: {}".format(last_ep))
 
@@ -478,14 +495,20 @@ class Agent:
                 exp_avg = None
                 exp_std = None
                 exp_ct = None
+                grads = None
                 if len(bonuses) > 0:
-                    bonuses = np.array(bonuses)
-                    exp_avg = np.mean(bonuses)
+                    # we need average for backprop
+                    exp_avg = sum(bonuses) / len(bonuses)
+                    exp_avg.backward()
+                    bonuses = np.array([b.item() for b in bonuses])
                     exp_std = np.std(bonuses)
                     exp_ct = len(bonuses)
+                    grads = [p.grad if p.grad is not None else None for p in self.RND_train.parameters()]
+
                 exp_results = {'exp_avg': exp_avg,
                                 'exp_std': exp_std,
-                                'exp_ct': exp_ct}
+                                'exp_ct': exp_ct,
+                                'grads': grads}
                 return exp_results
 
             reward = -0.1
@@ -514,10 +537,10 @@ class Agent:
             first_goal_signatures.add(sig)
 
             # Can only apply exploration reward while still PROVING
-            if self.exp_model is not None:
-                exp_reward = self.get_exp_reward(obs, env).item()
+            if self.opts.RND:
+                exp_reward = self.get_exp_reward(obs, env)
                 bonuses.append(exp_reward)
-                reward += exp_reward
+                reward += exp_reward.detach().item()
             samples.append((prob, reward))
 
             if len(script) >= self.opts.depth_limit:
@@ -534,9 +557,9 @@ class Agent:
         Returns exp bonus
         """
         local_context, goal = parse_goal(obs['fg_goals'][0])
-        exp_emb = self.exp_model.embed_terms([env], [local_context], [goal])
-        curr_emb = self.model.embed_terms([env], [local_context], [goal])
-        exp_reward = Prover._dist_embeddings(exp_emb, curr_emb)
+        fixed_emb = self.RND_fixed.embed_terms([env], [local_context], [goal]).detach()
+        train_emb = self.RND_train.embed_terms([env], [local_context], [goal])
+        exp_reward = RandomDistillation.compare(fixed_emb, train_emb)
         return exp_reward
 
     def sample_DFS(self, proof_env, tac_template, train=True):

@@ -40,7 +40,8 @@ class ParallelSampler:
             producers.append(proc)
             
         ended_workers = 0
-        grads = None
+        model_grads = None
+        rnd_grads = None
         collected = 0
         len_fg_bg = [0, 0]
         results = []
@@ -61,10 +62,14 @@ class ParallelSampler:
                 proof_name = res['proof_name']
 
                 # Process gradients (sum them)
-                grads = ParallelSampler._join_grads(grads, async_grads, clone=True)
+                model_grads = ParallelSampler._join_grads(model_grads, async_grads['model'], clone=True)
+                if self.agent.opts.RND and async_grads['RND'] is not None:
+                    rnd_grads = ParallelSampler._join_grads(rnd_grads, async_grads['RND'], clone=True)
+                    del async_exp_bonuses['grads']
+                del async_grads
                 print("async: bonuses", async_exp_bonuses)
                 ParallelSampler._join_bonuses(expl_bonuses, async_exp_bonuses, proof_name)
-                del async_grads
+
                 collected += async_collected
                 len_fg_bg[0] += async_len_fg_bg[0]
                 len_fg_bg[1] += async_len_fg_bg[1]
@@ -80,6 +85,7 @@ class ParallelSampler:
         print("->\tDone!")
         log("------------------FINISHED ASYNC-------------------")
         # assert collected == len(rewards), "{} collected != {} rewards".format(collected, len(rewards))
+        grads = {'model': model_grads, 'RND': rnd_grads}
         return results, grads, collected, losses, len_fg_bg, expl_bonuses
 
     def sample_dfs_trajectories(self, n_epochs=1, **kwargs):
@@ -174,7 +180,16 @@ class ParallelSampler:
                     losses = torch.cat([(prob * -r).unsqueeze(0) for prob, r in trajectory]).to(trajectory[0][0].device)
                     loss = torch.mean(losses)
                     loss.backward() # loss.backward(retain_graph=True) is VERY expensive
-                    grads = [p.grad if p.grad is not None else None for p in self.agent.model.parameters()]
+                    model_grads = [p.grad if p.grad is not None else None for p in self.agent.model.parameters()]
+                    grads = {'model': model_grads, 'RND': None}
+
+                    if self.agent.opts.RND and exp['exp_avg'] is not None:
+                        # rnd_loss = exp['exp_avg']
+                        # rnd_loss.backward()
+                        exp['exp_avg'] = exp['exp_avg'].item()
+                        # rnd_grads = [p.grad if p.grad is not None else None for p in self.agent.RND_train.parameters()]
+                        # grads['RND'] = rnd_grads['grads']
+                        grads['RND'] = exp['grads']
 
                     print("{}: collected {}".format(pid, collected))
                     print("{}: results {}".format(pid, results))

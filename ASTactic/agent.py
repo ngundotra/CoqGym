@@ -93,6 +93,9 @@ class Agent:
         self.dataloader = dataloader
         self.opts = opts
         self.projs_split = json.load(open(opts.projs_split))
+        if opts.freeze:
+            for p in self.model.parameters():
+                p.requires_grad = False
         # Just set this to None so we can check if it exists for exploration bonuses
         self.exp_model = None
 

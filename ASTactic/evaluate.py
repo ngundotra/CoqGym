@@ -37,6 +37,8 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--workers', type=int, default=4)
     parser.add_argument('--exp_path', type=str, default=None)
+    parser.add_argument('--freeze', action='store_true')
+    parser.add_argument('--RND', action='store_true')
     # End Custom
     parser.add_argument('--file', type=str)
     parser.add_argument('--project', type=str)
@@ -127,7 +129,8 @@ if __name__ == '__main__':
     if opts.train_rl:
         assert len(opts.log_dir) > 1, "Require log_dir with train_rl flag on"
         model_name = os.path.basename(os.path.normpath(opts.path)).strip('.pth')
-        true_logdir = "{}/epochs-{}-path-{}".format(opts.log_dir, opts.epochs, model_name)
+        true_logdir = "{}/epochs-{}-path-{}-{}-{}-{}".format(opts.log_dir, opts.epochs, model_name,
+            opts.sample, opts.freeze, opts.RND)
         if opts.folder:
             true_logdir += "-folder-{}".format(opts.folder)
             agent.descriptor = opts.folder

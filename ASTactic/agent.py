@@ -16,6 +16,7 @@ from hashlib import sha1
 import gc
 from copy import deepcopy
 import time
+from models.prover import Prover
 
 # Custom Sampling Techniques (highly advanced, >9000 IQ)
 from sampler import ParallelSampler
@@ -206,10 +207,11 @@ class Agent:
         logger.log_value("num_success", num_success, ep)
         logger.log_value("num_fail", num_fail, ep)
         logger.log_value('time', time.time() - start, ep)
-        if expl_bonuses['added'] > 0:
-            print("Found bonuses")
-            for k, v in expl_bonuses:
-                logger.log_value(k, v, ep)
+        for proof_name, bonuses in expl_bonuses.items():
+            if bonuses['added'] == 0:
+                continue
+            for key, val in bonuses.items():
+                logger.log_value(proof_name + '/' + key, val, ep)
         # todo: how to get numsteps?
 
     def train_RL_DFS(self, n_epoch, file_list, with_hammer, hammer_timeout):
@@ -465,24 +467,30 @@ class Agent:
             # Keep track of these things in case we exit in if-else block
             time = self.opts.timeout - obs['time_left']
             num_tactics = self.opts.max_num_tactics - obs['num_tactics_left']
-            exp_avg = None
-            exp_std = None
-            exp_ct = None
-            if len(bonuses) > 0:
-                exp_avg = np.mean(bonuses)
-                exp_std = np.std(bonuses)
-                exp_ct = len(bonuses)
-            exp_results = {'exp_avg': exp_avg,
-                            'exp_std': exp_std,
-                            'exp_ct': exp_ct}
-            print(tac, obs['result'])
+
+            def make_exp_results(bonuses):
+                exp_avg = None
+                exp_std = None
+                exp_ct = None
+                if len(bonuses) > 0:
+                    bonuses = np.array(bonuses)
+                    exp_avg = np.mean(bonuses)
+                    exp_std = np.std(bonuses)
+                    exp_ct = len(bonuses)
+                exp_results = {'exp_avg': exp_avg,
+                                'exp_std': exp_std,
+                                'exp_ct': exp_ct}
+                return exp_results
+
             reward = -0.1
             if obs['result'] == 'SUCCESS':
                 script.append(tac)
                 samples.append((prob, 5.0))
+                exp_results = make_exp_results(bonuses)
                 return {'samples': samples, 'results': (True, script, time, num_tactics), 'exp': exp_results}
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
                 samples.append((prob, -0.1))
+                exp_results = make_exp_results(bonuses)
                 return {'samples': samples, 'results': (True, script, time, num_tactics), 'exp': exp_results}
             elif obs['result'] in ['ERROR']:  # Tactic is misapplied, nothing happened
                 reward = -3.0
@@ -499,13 +507,14 @@ class Agent:
 
             # Can only apply exploration reward while still PROVING
             if self.exp_model is not None:
-                exp_reward = self.get_exp_reward(obs, env)
+                exp_reward = self.get_exp_reward(obs, env).item()
                 bonuses.append(exp_reward)
                 reward += exp_reward
             samples.append((prob, reward))
 
             if len(script) >= self.opts.depth_limit:
-                return {'samples': samples, 'results': (False, script, time, num_tactics)}
+                exp_results = make_exp_results(bonuses)
+                return {'samples': samples, 'results': (False, script, time, num_tactics), 'exp': exp_results}
 
             # Sample again if we ran out of tactics
             tactics, tacs, probs = self._get_tactics(obs, env)
@@ -551,7 +560,7 @@ class Agent:
 
         # initialize
         local_context, goal = parse_goal(obs['fg_goals'][0])
-        tactics = self.model.beam_search(env, local_context, goal, train)
+        tactics = self.model.beam_search(env, local_context, goal, "DFS")
         stack = [[(tac_template % tac.to_tokens(), prob) for tac, prob in tactics[::-1]]]
         script = []
 

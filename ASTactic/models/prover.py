@@ -60,7 +60,7 @@ class Prover(nn.Module):
         return environment_embeddings, context_embeddings, goal_embeddings
 
     @staticmethod
-    def _dist_embeddings(self, embedding1, embedding2):
+    def _dist_embeddings(embedding1, embedding2):
         """
         Computes cosine distance between embeddings.
 
@@ -74,11 +74,16 @@ class Prover(nn.Module):
                 # Context embedding sometimes has 0 rows
                 if len(emb1) == 0 or len(emb2) == 0:
                     continue
+                if len(emb1.size()) < 2 or len(emb2.size()) < 2:
+                    emb1 = emb1.unsqueeze(0)
+                    emb2 = emb2.unsqueeze(0)
 
                 # yes this is practically CosineEmbeddingLoss, but creating
                 # the necessary y-tensor of ones seemed tedious
-                cos_dists += torch.mean(1 - cos(emb1, emb2)).detach()
-            dist += np.mean(cos_dists) / 3
+                dist = (1 - cos(emb1, emb2)).detach()
+                cos_dists.append(dist)
+            if len(cos_dists) > 0:
+                dist += torch.mean(torch.cat(cos_dists)) / 3
         return dist
 
     def forward(self, environment, local_context, goal, actions, teacher_forcing):
@@ -111,8 +116,8 @@ class Prover(nn.Module):
             print("Goal embeddings length:", len(goal_embeddings))
         goal = {'embeddings': goal_embeddings, 'quantified_idents': goal.quantified_idents}
         if sampling == "PG":
-            # asts = self.tactic_decoder.beam_search_train(environment, local_context, goal)
-            asts = self.tactic_decoder.simple_search(environment, local_context, goal)
+            asts = self.tactic_decoder.beam_search_train(environment, local_context, goal)
+            # asts = self.tactic_decoder.simple_search(environment, local_context, goal)
         elif sampling == "DFS":
             asts = self.tactic_decoder.beam_search_train(environment, local_context, goal)
         else:

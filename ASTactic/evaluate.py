@@ -86,13 +86,13 @@ if __name__ == '__main__':
         model = None
 
     exp_model = None
-    if 'exp' in opts.method:
+    if opts.exp_path is not None:
         exp_model = Prover(opts)
         log('loading exploration model checkpoint from {} ...'.format(opts.exp_path))
         if opts.device.type == 'cpu':
             checkpoint = torch.load(opts.path, map_location='cpu')
         else:
-            checkpoint = torch.load(opts.path)
+            checkpoint = torch.load(opts.exp_path)
         exp_model.load_state_dict(checkpoint['state_dict'])
         exp_model.to(opts.device)
 

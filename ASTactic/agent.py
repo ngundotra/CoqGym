@@ -490,6 +490,7 @@ class Agent:
                 exp_results = make_exp_results(bonuses)
                 return {'samples': samples, 'results': (True, script, time, num_tactics), 'exp': exp_results}
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
+                script.append(tac)
                 samples.append((prob, -0.1))
                 exp_results = make_exp_results(bonuses)
                 return {'samples': samples, 'results': (False, script, time, num_tactics), 'exp': exp_results}
@@ -503,6 +504,7 @@ class Agent:
             if sig in first_goal_signatures:
                 proof_env.step('Undo.')
                 script.pop()
+                samples.append((prob, reward))
                 continue
             first_goal_signatures.add(sig)
 

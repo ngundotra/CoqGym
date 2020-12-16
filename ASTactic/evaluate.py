@@ -122,7 +122,7 @@ if __name__ == '__main__':
             files.extend(glob(os.path.join(opts.datapath, '%s/**/*.json' % proj), recursive=True))
 
     if opts.filter:
-        files = [f for f in files if md5(f.encode('utf-8')).hexdigest().startswith(opts.filter)]
+        files = [f for f in files if f.endswith("g3.json")]
 
     print(files)
     results = []

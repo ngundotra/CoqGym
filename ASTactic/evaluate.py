@@ -36,6 +36,7 @@ if __name__ == '__main__':
     parser.add_argument('--sample', choices=['vanilla', 'DFS'], type=str, default='DFS')
     parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--workers', type=int, default=4)
+    parser.add_argument('--exp_path', type=str, default=None)
     # End Custom
     parser.add_argument('--file', type=str)
     parser.add_argument('--project', type=str)
@@ -84,12 +85,26 @@ if __name__ == '__main__':
     else:
         model = None
 
+    exp_model = None
+    if opts.exp_path is not None:
+        exp_model = Prover(opts)
+        log('loading exploration model checkpoint from {} ...'.format(opts.exp_path))
+        if opts.device.type == 'cpu':
+            checkpoint = torch.load(opts.path, map_location='cpu')
+        else:
+            checkpoint = torch.load(opts.exp_path)
+        exp_model.load_state_dict(checkpoint['state_dict'])
+        exp_model.to(opts.device)
+
     optimizer = None
     if opts.train_rl:
         optimizer = torch.optim.RMSprop(model.parameters(), lr=3e-5,
                                         momentum=0.9,
                                         weight_decay=1e-6)
     agent = Agent(model, optimizer, None, opts)
+
+    if exp_model is not None:
+        agent.exp_model = exp_model
 
     print(opts.file, opts.folder)
     if opts.file:

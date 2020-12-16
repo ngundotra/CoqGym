@@ -45,6 +45,7 @@ class ParallelSampler:
         len_fg_bg = [0, 0]
         results = []
         losses = []
+        expl_bonuses = {}
         while ended_workers != n_epochs:
             res = queue.get()
             if res is None:
@@ -56,9 +57,13 @@ class ParallelSampler:
                 async_collected = res['collected']
                 async_loss = res['loss']
                 async_len_fg_bg = res['len_fg_bg']
+                async_exp_bonuses = res['exp_bonuses']
+                proof_name = res['proof_name']
 
                 # Process gradients (sum them)
                 grads = ParallelSampler._join_grads(grads, async_grads, clone=True)
+                print("async: bonuses", async_exp_bonuses)
+                ParallelSampler._join_bonuses(expl_bonuses, async_exp_bonuses, proof_name)
                 del async_grads
                 collected += async_collected
                 len_fg_bg[0] += async_len_fg_bg[0]
@@ -70,10 +75,12 @@ class ParallelSampler:
         for proc in producers:
             proc.join()
         del queue
+
+        ParallelSampler._coalesce_bonuses(expl_bonuses)
         print("->\tDone!")
         log("------------------FINISHED ASYNC-------------------")
         # assert collected == len(rewards), "{} collected != {} rewards".format(collected, len(rewards))
-        return results, grads, collected, losses, len_fg_bg
+        return results, grads, collected, losses, len_fg_bg, expl_bonuses
 
     def sample_dfs_trajectories(self, n_epochs=1, **kwargs):
         """
@@ -128,7 +135,7 @@ class ParallelSampler:
                 grads = ParallelSampler._join_grads(grads, async_grads, clone=True)
                 del async_grads
                 collected += async_collected
-                results.append(async_results)
+                results += async_results
                 losses.append(async_loss)
 
         done.set()
@@ -151,14 +158,14 @@ class ParallelSampler:
         pid, queue, done = args[0], args[1], args[2]
         print("{}: started collection".format(pid))
         for fenvargs in self.file_env_args:
-        # try:
+            # try:
             with FileEnv(*fenvargs) as fenv:
                 prob_grads = None
                 for proof_env in fenv:
                     self.agent.optimizer.zero_grad()
                     # Collect data we can backprop
                     data = self.agent.sample_once(proof_env, self.tac_template, train=True)
-                    trajectory, results = data['samples'], data['results']
+                    trajectory, results, exp = data['samples'], data['results'], data['exp']
                     collected = len(trajectory)
                     fg_goals, bg_goals, shelved, given_up = proof_env.serapi.query_goals()
                     len_fg_bg = (len(fg_goals), len(bg_goals))
@@ -175,9 +182,11 @@ class ParallelSampler:
                     'collected': collected, 
                     'results': results,
                     'loss': loss.detach().item(),
-                    "len_fg_bg": len_fg_bg})
-        # except Exception as e:
-        #     print("{}: ERROR-{}".format(pid,e))
+                    "len_fg_bg": len_fg_bg,
+                    'exp_bonuses': exp,
+                    'proof_name': proof_env.name()})
+            # except Exception as e:
+            #     print("{}: ERROR-{}".format(pid,e))
         queue.put(None)
         print("{}: finished & waiting".format(pid))
         done.wait()
@@ -203,3 +212,31 @@ class ParallelSampler:
                 elif grad is not None:
                     old[i] = grad
         return old        
+
+    @staticmethod
+    def _join_bonuses(all_bonuses, new, proof_name):
+        """
+        Joins dictionary of bonuses collected per proof
+        """
+        if proof_name not in all_bonuses:
+            all_bonuses[proof_name] = {}
+        old = all_bonuses[proof_name]
+        found_numerical = 0
+        for k,v in new.items():
+            if k not in old and v is not None:
+                old[k] = v
+            elif v is not None:
+                found_numerical = 1
+                old[k] += v
+
+        if 'added' not in old:
+            old['added'] = found_numerical
+        else:
+            old['added'] += found_numerical
+
+    @staticmethod
+    def _coalesce_bonuses(all_bonuses):
+        for pf, bonuses in all_bonuses.items():
+            if bonuses['added'] > 0:
+                bonuses['exp_avg'] /= bonuses['added']
+                bonuses['exp_std'] /= bonuses['added']

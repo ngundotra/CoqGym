@@ -43,6 +43,10 @@ class ProofEnv:
                                         shelved_goals=shelved_goals, given_up_goals=given_up_goals)
 
 
+    def name(self):
+        return self.proof['name']
+
+
     def step(self, command):
         '''
         perform a single interaction
@@ -222,8 +226,8 @@ class FileEnv:
             self.cmd_idx = 0
 
         # pdb.set_trace()
-        print('name:', next_proof['name'])
-        print('line_nb:', next_proof['line_nb'])
+        # print('name:', next_proof['name'])
+        # print('line_nb:', next_proof['line_nb'])
         while self.cmd_idx <= next_proof['line_nb']:
             cmd, _ = self.vernac_cmds[self.cmd_idx]
             self.serapi.execute(cmd)

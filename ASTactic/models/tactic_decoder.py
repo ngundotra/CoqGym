@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 import math
 import random
 import pdb
@@ -463,11 +464,6 @@ class TacticDecoder(nn.Module):
 
             controller_input = torch.cat([a_tm1, goal['embeddings'].expand(len(indice), -1), u_t, p_t, n_t], dim=1)
             states = self.controller(controller_input, s_tm1)
-            if states.size()[0] != 1:
-                print("States size: {}\tInput size: {}\t s_tm1 size: {}".format(states.size(),
-                    controller_input.size(), 
-                    s_tm1.size()))
-                # pdb.set_trace()
             # compute the log likelihood and pick the top candidates
             beam_candidates = []
             for j, idx in enumerate(indice):
@@ -550,12 +546,15 @@ class TacticDecoder(nn.Module):
         complete_trees = sorted(complete_trees, key=lambda x: x[1], reverse=True)  # pick the top ASTs
         return complete_trees[:self.opts.num_tactic_candidates]
 
-    def sample_item(self, log_cond_prob, rules):
+    def sample_item(self, log_cond_prob, rules, eps=0.5):
         """
         Creates Categorical distribution based on logits, and samples from it
         """
-        rule_dist = torch.distributions.Categorical(logits=log_cond_prob)
-        n = rule_dist.sample()
+        if np.random.random() < eps:
+            rule_dist = torch.distributions.Uniform(low=0, high=len(log_cond_prob))
+        else:
+            rule_dist = torch.distributions.Categorical(logits=log_cond_prob)
+        n = int(rule_dist.sample())
         if rules is None:
             return n, None
         return n, rules[n]
@@ -567,6 +566,7 @@ class TacticDecoder(nn.Module):
         # initialize the trees in the beam
         assert goal['embeddings'].size(0) == 1  # only support batchsize == 1
         beam, frontiers = self.initialize_trees(1)
+        pdb.set_trace()
         log_likelihood = [0.]  # the (unnormalized) objective function maximized by the beam search
         complete_trees = []  # the complete ASTs generated during the beam search
 
@@ -616,7 +616,7 @@ class TacticDecoder(nn.Module):
                     if candidates == []:
                         candidates = ['H'] + goal['quantified_idents']
                         log_cond_prob = - math.log(len(candidates))
-                        _, cand = self.sample_item(log_cond_prob, candidates)
+                        _, cand = self.sample_item(torch.Tensor([log_cond_prob]).to(node.state.device), candidates)
                         beam_candidates.append((idx, log_likelihood[idx] + log_cond_prob, cand))
                     else:
                         if node.symbol == 'QUALID':
@@ -659,15 +659,18 @@ class TacticDecoder(nn.Module):
             for idx, log_cond_prob, action in beam_candidates:
                 ast, stack = self.duplicate(beam[idx], frontiers[idx])
                 node = stack.pop()
+                assert len(node.children) <= 1
                 if isinstance(action, int):  # expand a nonterimial node
                     rule = self.grammar.production_rules[action]
                     self.expand_node_set_pred(node, rule, stack)
                 else:  # expand a terminal node
                     node.expand(action)
+                if len(node.children) != 1:
+                    pdb.set_trace()
                 new_beam.append(ast)
                 new_frontiers.append(stack)
                 new_log_likelihood.append(log_likelihood[idx] + log_cond_prob)
-                print("SEARCHING:\n", node)
+                # print("SEARCHING:\n", node)
             beam = new_beam
             frontiers = new_frontiers
             log_likelihood = new_log_likelihood

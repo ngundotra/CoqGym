@@ -170,17 +170,18 @@ class Agent:
                 start = time.time()
                 last_ep = ep
                 print("\n>>>>>>>>>>>>>>>>>>>>EPOCH: {}<<<<<<<<<<<<<<<<<<<<<<\n".format(ep))
+                self.optimizer.zero_grad()
                 results, grads, collected, losses, len_fg_bg, expl_bonus = \
                     self.sample_parallel(epochs_per_update, tac_template=tac_template, file_env_args=file_env_args, train=True)
                 all_results += results
                 total_collected += collected
 
-                for idx, (layer, grad) in enumerate(zip(self.model.parameters(), grads)):
+                params = self.model.parameters()
+                for idx, (layer, grad) in enumerate(zip(params, grads)):
                     if grad is not None:
-                        for p, g in zip(layer, grad):
-                            p.grad = g / collected
-                
+                        layer.grad = grad / collected
                 self._log_epoch(logger, ep, start, results, collected, losses, len_fg_bg, expl_bonus)
+                
                 self.optimizer.step()
         except KeyboardInterrupt as kb:
             print("Ended on epoch: {}".format(last_ep))
@@ -491,7 +492,7 @@ class Agent:
             elif obs['result'] in ['MAX_NUM_TACTICS_REACHED', 'MAX_TIME_REACHED']:
                 samples.append((prob, -0.1))
                 exp_results = make_exp_results(bonuses)
-                return {'samples': samples, 'results': (True, script, time, num_tactics), 'exp': exp_results}
+                return {'samples': samples, 'results': (False, script, time, num_tactics), 'exp': exp_results}
             elif obs['result'] in ['ERROR']:  # Tactic is misapplied, nothing happened
                 reward = -3.0
             else:

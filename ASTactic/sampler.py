@@ -80,7 +80,6 @@ class ParallelSampler:
         print("->\tDone!")
         log("------------------FINISHED ASYNC-------------------")
         # assert collected == len(rewards), "{} collected != {} rewards".format(collected, len(rewards))
-        pdb.set_trace()
         return results, grads, collected, losses, len_fg_bg, expl_bonuses
 
     def sample_dfs_trajectories(self, n_epochs=1, **kwargs):

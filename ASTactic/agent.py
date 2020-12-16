@@ -574,8 +574,8 @@ class Agent:
             samples.append((prob, reward))
 
             if len(script) >= self.opts.depth_limit:
-                exp_results = make_exp_results(bonuses)
-                return {'samples': samples, 'results': (False, script, time, num_tactics), 'exp': self.exp_results}
+                exp_results = self.make_exp_results(bonuses)
+                return {'samples': samples, 'results': (False, script, time, num_tactics), 'exp': exp_results}
 
             # Sample again if we ran out of tactics
             tactics, tacs, probs = self._get_tactics(obs, env)

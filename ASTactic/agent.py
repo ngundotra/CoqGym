@@ -19,6 +19,8 @@ import time
 from models.prover import Prover
 from rnd import RandomDistillation
 
+from torchviz import make_dot
+
 # Custom Sampling Techniques (highly advanced, >9000 IQ)
 from sampler import ParallelSampler
 
@@ -197,7 +199,10 @@ class Agent:
                     if grad is not None:
                         layer.grad = grad / collected
                 self.optimizer.step()
-                self._log_epoch(logger, ep, start, results, collected, losses, len_fg_bg, expl_bonus)
+                try:
+                    self._log_epoch(logger, ep, start, results, collected, losses, len_fg_bg, expl_bonus)
+                except Exception as e:
+                    print("Could not log")
 
                 if self.opts.RND:
                     self.RND_optimizer.zero_grad()
@@ -211,7 +216,7 @@ class Agent:
 
         print("***Saving model***")
         self.save(last_ep+1, self.true_logdir)
-        print("Saved model on epoch {} to {}".format(last_ep+1, save_folder))
+        print("Saved model on epoch {} to {}".format(last_ep+1, self.true_logdir))
         return results, total_collected
 
     
@@ -236,6 +241,8 @@ class Agent:
             if bonuses['added'] == 0:
                 continue
             for key, val in bonuses.items():
+                if val is None:
+                    val = 0
                 logger.log_value(proof_name + '/' + key, val, ep)
         # todo: how to get numsteps?
 
@@ -272,6 +279,14 @@ class Agent:
                             losses_env = torch.cat([ ((-logprob)
                                             * (reward)).unsqueeze(0)
                                             for logprob, reward in samples])
+
+                            dictionary_vals = {}
+                            for name, param in self.model.named_parameters():
+                                dictionary_vals[name] = param
+                            
+                            graph = make_dot(samples[0][0], dictionary_vals)
+                            graph.save('test-out/yeehaw.gv')
+                            pdb.set_trace()
                             losses.append(torch.mean(losses_env))
                             expl_bonus['added'] = 0
                             if self.opts.RND:
@@ -291,7 +306,7 @@ class Agent:
 
                 if self.opts.RND and expl_bonus['exp_avg'] is not None:
                     self.RND_optimizer.zero_grad()
-                    bonus_loss = sum([b['exp_avg'] for k, b in expl_bonuses.items()]) / len(expl_bonuses)
+                    bonus_loss = sum([b['exp_avg'] for k, b in expl_bonuses.items() if b['exp_avg'] is not None ]) / len(expl_bonuses)
                     bonus_loss.backward()
                     self.RND_optimizer.step()
         except KeyboardInterrupt as kb:

@@ -4,3 +4,9 @@ coq_projects/
 coq/
 coq-serapi/
 ASTactic/coqhammer/
+ASTactic/evaluation/
+tfm/txt/
+*.tar.gz
+*.pdf
+*.gv
+*.out
